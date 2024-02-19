@@ -1,2 +1,7 @@
 .idea
 venv
+data
+.python-version
+crakn/__pycache__
+crakn/backbones/__pycache__
+CrAKN.egg-info

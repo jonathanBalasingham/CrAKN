@@ -7,7 +7,7 @@ from pydantic import model_validator
 from typing import Literal
 from crakn.utils import BaseSettings
 from crakn.backbones.gcn import SimpleGCNConfig
-
+from crakn.crakn import CrAKNConfig
 
 try:
     VERSION = (
@@ -200,7 +200,7 @@ class TrainingConfig(BaseSettings):
     output_dir: str = os.path.abspath(".")  # typically 50
 
     # model configuration
-    model: Union[
+    backbone: Union[
         #CGCNNConfig,
         SimpleGCNConfig,
         #CrAKNConfig,  TODO: Add this
@@ -210,7 +210,7 @@ class TrainingConfig(BaseSettings):
     @classmethod
     def set_input_size(cls, values):
         """Automatically configure node feature dimensionality."""
-        values.model.atom_input_features = FEATURESET_SIZE[
+        values.backbone.atom_input_features = FEATURESET_SIZE[
             values.atom_features
         ]
 

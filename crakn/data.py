@@ -89,22 +89,6 @@ def load_graphs(
     ```
     """
 
-    def atoms_to_graph(atoms):
-        """Convert structure dict to DGLGraph."""
-        structure = (
-            Atoms.from_dict(atoms) if isinstance(atoms, dict) else atoms
-        )
-        return Graph.atom_dgl_multigraph(
-            structure,
-            cutoff=cutoff,
-            cutoff_extra=cutoff_extra,
-            atom_features="atomic_number",
-            max_neighbors=max_neighbors,
-            compute_line_graph=False,
-            use_canonize=use_canonize,
-            neighbor_strategy=neighbor_strategy,
-        )
-
     if cachedir is not None:
         cachefile = cachedir / f"{name}-{neighbor_strategy}.bin"
     else:
@@ -118,7 +102,6 @@ def load_graphs(
         graphs = []
         # columns=dataset.columns
         for ii, i in tqdm(dataset.iterrows()):
-            # print('iooooo',i)
             atoms = i["atoms"]
             structure = (
                 Atoms.from_dict(atoms) if isinstance(atoms, dict) else atoms
@@ -134,7 +117,6 @@ def load_graphs(
                 neighbor_strategy=neighbor_strategy,
                 id=i[id_tag],
             )
-            # print ('ii',ii)
             if "extra_features" in i:
                 natoms = len(atoms["elements"])
                 # if "extra_features" in columns:

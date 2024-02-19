@@ -178,13 +178,13 @@ def train_dgl(
         "alignn_cgcnn",
         "alignn_layernorm",
     }
-    if config.model.name == "clgn":
+    if config.backbone.name == "clgn":
         line_graph = True
-    if config.model.name == "cgcnn":
+    if config.backbone.name == "cgcnn":
         line_graph = True
-    if config.model.name == "icgcnn":
+    if config.backbone.name == "icgcnn":
         line_graph = True
-    if config.model.name in alignn_models and config.model.alignn_layers > 0:
+    if config.backbone.name in alignn_models and config.backbone.alignn_layers > 0:
         line_graph = True
     # print ('output_dir train', config.output_dir)
     if not train_val_test_loaders:
@@ -220,7 +220,7 @@ def train_dgl(
             filename=config.filename,
             cutoff=config.cutoff,
             max_neighbors=config.max_neighbors,
-            output_features=config.model.output_features,
+            output_features=config.backbone.output_features,
             classification_threshold=config.classification_threshold,
             target_multiplication_factor=config.target_multiplication_factor,
             standard_scalar_and_pca=config.standard_scalar_and_pca,
@@ -239,13 +239,13 @@ def train_dgl(
 
     prepare_batch = partial(prepare_batch, device=device)
     if classification:
-        config.model.classification = True
+        config.backbone.classification = True
     # define network, optimizer, scheduler
     _model = {
-        "gcn" : SimpleGCN
+        "simplegcn" : SimpleGCN
     }
     if model is None:
-        net = _model.get(config.model.name)(config.model)
+        net = _model.get(config.backbone.name)(config.backbone)
     else:
         net = model
     if config.data_parallel and torch.cuda.device_count() > 1:
@@ -279,7 +279,7 @@ def train_dgl(
             optimizer,
         )
 
-    if config.model.name == "alignn_atomwise":
+    if config.backbone.name == "alignn_atomwise":
         if config.random_seed is not None:
             random.seed(config.random_seed)
             np.random.seed(config.random_seed)
@@ -387,8 +387,8 @@ def train_dgl(
                 loss2 = 0  # Such as bader charges
                 loss3 = 0  # Such as forces
                 loss4 = 0  # Such as stresses
-                if config.model.output_features is not None:
-                    loss1 = config.model.graphwise_weight * criterion(
+                if config.backbone.output_features is not None:
+                    loss1 = config.backbone.graphwise_weight * criterion(
                         result["out"], dats[2].to(device)
                     )
                     info["target_out"] = dats[2].cpu().numpy().tolist()
@@ -397,11 +397,11 @@ def train_dgl(
                     )
 
                 if (
-                    config.model.atomwise_output_features > 0
+                    config.backbone.atomwise_output_features > 0
                     # config.model.atomwise_output_features is not None
-                    and config.model.atomwise_weight != 0
+                    and config.backbone.atomwise_weight != 0
                 ):
-                    loss2 = config.model.atomwise_weight * criterion(
+                    loss2 = config.backbone.atomwise_weight * criterion(
                         result["atomwise_pred"].to(device),
                         dats[0].ndata["atomwise_target"].to(device),
                     )
@@ -418,8 +418,8 @@ def train_dgl(
                     #    )
                     # )
 
-                if config.model.calculate_gradient:
-                    loss3 = config.model.gradwise_weight * criterion(
+                if config.backbone.calculate_gradient:
+                    loss3 = config.backbone.gradwise_weight * criterion(
                         result["grad"].to(device),
                         dats[0].ndata["atomwise_grad"].to(device),
                     )
@@ -430,9 +430,9 @@ def train_dgl(
                         result["grad"].cpu().detach().numpy().tolist()
                     )
 
-                if config.model.stresswise_weight != 0:
+                if config.backbone.stresswise_weight != 0:
 
-                    loss4 = config.model.stresswise_weight * criterion(
+                    loss4 = config.backbone.stresswise_weight * criterion(
                         (result["stresses"]).to(device),
                         torch.cat(tuple(dats[0].ndata["stresses"])).to(device),
                     )
@@ -500,8 +500,8 @@ def train_dgl(
                 loss2 = 0  # Such as bader charges
                 loss3 = 0  # Such as forces
                 loss4 = 0  # Such as stresses
-                if config.model.output_features is not None:
-                    loss1 = config.model.graphwise_weight * criterion(
+                if config.backbone.output_features is not None:
+                    loss1 = config.backbone.graphwise_weight * criterion(
                         result["out"], dats[2].to(device)
                     )
                     info["target_out"] = dats[2].cpu().numpy().tolist()
@@ -510,10 +510,10 @@ def train_dgl(
                     )
 
                 if (
-                    config.model.atomwise_output_features > 0
-                    and config.model.atomwise_weight != 0
+                    config.backbone.atomwise_output_features > 0
+                    and config.backbone.atomwise_weight != 0
                 ):
-                    loss2 = config.model.atomwise_weight * criterion(
+                    loss2 = config.backbone.atomwise_weight * criterion(
                         result["atomwise_pred"].to(device),
                         dats[0].ndata["atomwise_target"].to(device),
                     )
@@ -523,8 +523,8 @@ def train_dgl(
                     info["pred_atomwise_pred"] = (
                         result["atomwise_pred"].cpu().detach().numpy().tolist()
                     )
-                if config.model.calculate_gradient:
-                    loss3 = config.model.gradwise_weight * criterion(
+                if config.backbone.calculate_gradient:
+                    loss3 = config.backbone.gradwise_weight * criterion(
                         result["grad"].to(device),
                         dats[0].ndata["atomwise_grad"].to(device),
                     )
@@ -534,12 +534,12 @@ def train_dgl(
                     info["pred_grad"] = (
                         result["grad"].cpu().detach().numpy().tolist()
                     )
-                if config.model.stresswise_weight != 0:
+                if config.backbone.stresswise_weight != 0:
                     # loss4 = config.model.stresswise_weight * criterion(
                     #    result["stress"].to(device),
                     #    dats[0].ndata["stresses"][0].to(device),
                     # )
-                    loss4 = config.model.stresswise_weight * criterion(
+                    loss4 = config.backbone.stresswise_weight * criterion(
                         (result["stresses"]).to(device),
                         torch.cat(tuple(dats[0].ndata["stresses"])).to(device),
                     )
@@ -621,8 +621,8 @@ def train_dgl(
             loss2 = 0  # Such as bader charges
             loss3 = 0  # Such as forces
             loss4 = 0  # Such as stresses
-            if config.model.output_features is not None:
-                loss1 = config.model.graphwise_weight * criterion(
+            if config.backbone.output_features is not None:
+                loss1 = config.backbone.graphwise_weight * criterion(
                     result["out"], dats[2].to(device)
                 )
                 info["target_out"] = dats[2].cpu().numpy().tolist()
@@ -630,8 +630,8 @@ def train_dgl(
                     result["out"].cpu().detach().numpy().tolist()
                 )
 
-            if config.model.atomwise_output_features > 0:
-                loss2 = config.model.atomwise_weight * criterion(
+            if config.backbone.atomwise_output_features > 0:
+                loss2 = config.backbone.atomwise_weight * criterion(
                     result["atomwise_pred"].to(device),
                     dats[0].ndata["atomwise_target"].to(device),
                 )
@@ -642,8 +642,8 @@ def train_dgl(
                     result["atomwise_pred"].cpu().detach().numpy().tolist()
                 )
 
-            if config.model.calculate_gradient:
-                loss3 = config.model.gradwise_weight * criterion(
+            if config.backbone.calculate_gradient:
+                loss3 = config.backbone.gradwise_weight * criterion(
                     result["grad"].to(device),
                     dats[0].ndata["atomwise_grad"].to(device),
                 )
@@ -653,8 +653,8 @@ def train_dgl(
                 info["pred_grad"] = (
                     result["grad"].cpu().detach().numpy().tolist()
                 )
-            if config.model.stresswise_weight != 0:
-                loss4 = config.model.stresswise_weight * criterion(
+            if config.backbone.stresswise_weight != 0:
+                loss4 = config.backbone.stresswise_weight * criterion(
                     # torch.flatten(result["stress"].to(device)),
                     # (dats[0].ndata["stresses"]).to(device),
                     # torch.flatten(dats[0].ndata["stresses"]).to(device),
@@ -766,7 +766,7 @@ def train_dgl(
 
     # set up training engine and evaluators
     metrics = {"loss": Loss(criterion), "mae": MeanAbsoluteError()}
-    if config.model.output_features > 1 and config.standard_scalar_and_pca:
+    if config.backbone.output_features > 1 and config.standard_scalar_and_pca:
         # metrics = {"loss": Loss(criterion), "mae": MeanAbsoluteError()}
         metrics = {
             "loss": Loss(
@@ -1032,7 +1032,7 @@ def train_dgl(
     if (
         config.write_predictions
         and not classification
-        and config.model.output_features > 1
+        and config.backbone.output_features > 1
     ):
         net.eval()
         mem = []
@@ -1062,7 +1062,7 @@ def train_dgl(
     if (
         config.write_predictions
         and not classification
-        and config.model.output_features == 1
+        and config.backbone.output_features == 1
     ):
         net.eval()
         f = open(

@@ -16,8 +16,10 @@ class SimpleGCNConfig(BaseSettings):
     name: Literal["simplegcn"]
     atom_input_features: int = 1
     weight_edges: bool = True
-    width: int = 64
+    layers: int = 1
+    embedding_features: int = 64
     output_features: int = 1
+    edge_lengthscale: int = 8
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
@@ -33,19 +35,22 @@ class SimpleGCN(nn.Module):
         self.weight_edges = config.weight_edges
 
         self.atom_embedding = nn.Linear(
-            config.atom_input_features, config.width
+            config.atom_input_features, config.embedding_features
         )
 
-        self.layer1 = GraphConv(config.width, config.width)
-        self.layer2 = GraphConv(config.width, config.output_features)
+        self.layer1 = [GraphConv(config.embedding_features, config.embedding_features) for _ in range(config.layers)]
+
+        self.layer2 = GraphConv(config.embedding_features, config.output_features)
         self.readout = AvgPooling()
 
     def forward(self, g):
         """Baseline SimpleGCN : start with `atom_features`."""
+        if isinstance(g, (tuple, list)):
+            g = g[0]
         g = g.local_var()
 
         if self.weight_edges:
-            r = torch.norm(g.edata["bondlength"], dim=1)
+            r = torch.norm(g.edata["r"], dim=1)
             edge_weights = torch.exp(-(r ** 2) / self.edge_lengthscale ** 2)
         else:
             edge_weights = None
@@ -54,7 +59,9 @@ class SimpleGCN(nn.Module):
         v = g.ndata.pop("atom_features")
         node_features = self.atom_embedding(v)
 
-        x = F.relu(self.layer1(g, node_features, edge_weight=edge_weights))
+        x = node_features
+        for layer in self.layer1:
+            x = F.relu(layer(g, node_features, edge_weight=edge_weights))
         x = self.layer2(g, x, edge_weight=edge_weights)
         x = self.readout(g, x)
 

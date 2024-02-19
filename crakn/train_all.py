@@ -1,18 +1,19 @@
-#!/usr/bin/env python
-
+#! python
 """Module to train for a folder with formatted dataset."""
 import csv
 import os
 import sys
 import time
 from jarvis.core.atoms import Atoms
-from crakn.data import get_train_val_loaders
-from crakn.train import train_dgl
-from crakn.config import TrainingConfig
 from jarvis.db.jsonutils import loadjson
 import argparse
 import glob
 import torch
+
+from crakn.data import get_train_val_loaders
+from crakn.train import train_dgl
+from crakn.config import TrainingConfig
+
 
 device = "cpu"
 if torch.cuda.is_available():
@@ -34,7 +35,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--config_name",
-    default="alignn/examples/sample_data/config_example.json",
+    default="crakn/examples/sample_data/config_example.json",
     help="Name of the config file",
 )
 
@@ -174,17 +175,16 @@ def train_for_folder(
             len(i) == len(n_outputs[0]) for i in n_outputs
         ]
 
-    # print ('n_outputs',n_outputs[0])
     if multioutput and classification_threshold is not None:
         raise ValueError("Classification for multi-output not implemented.")
     if multioutput and lists_length_equal:
-        config.model.output_features = len(n_outputs[0])
+        config.backbone.output_features = len(n_outputs[0])
     else:
         # TODO: Pad with NaN
         if not lists_length_equal:
             raise ValueError("Make sure the outputs are of same size.")
         else:
-            config.model.output_features = 1
+            config.backbone.output_features = 1
     (
         train_loader,
         val_loader,
@@ -211,7 +211,7 @@ def train_for_folder(
         filename=config.filename,
         cutoff=config.cutoff,
         max_neighbors=config.max_neighbors,
-        output_features=config.model.output_features,
+        output_features=config.backbone.output_features,
         classification_threshold=config.classification_threshold,
         target_multiplication_factor=config.target_multiplication_factor,
         standard_scalar_and_pca=config.standard_scalar_and_pca,
@@ -231,8 +231,6 @@ def train_for_folder(
     )
     t2 = time.time()
     print("Time taken (s):", t2 - t1)
-
-    # train_data = get_torch_dataset(
 
 
 if __name__ == "__main__":

@@ -5,3 +5,4 @@ data
 crakn/__pycache__
 crakn/backbones/__pycache__
 CrAKN.egg-info
+crakn/core/__pycache__

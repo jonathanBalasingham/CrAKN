@@ -130,30 +130,12 @@ class TrainingConfig(BaseSettings):
         "dft_3d",
         "jdft_3d-8-18-2021",
         "dft_2d",
-        "megnet",
-        "megnet2",
-        "mp_3d_2020",
-        "qm9",
-        "qm9_dgl",
-        "qm9_std_jctc",
-        "user_data",
-        "oqmd_3d_no_cfid",
-        "edos_up",
-        "edos_pdos",
-        "qmof",
-        "qe_tb",
-        "hmof",
-        "hpov",
-        "pdbbind",
-        "pdbbind_core",
-        "tinnet_OH",
-        "tinnet_O",
-        "tinnet_N",
+        "matbench"
     ] = "dft_3d"
     target: TARGET_ENUM = "formation_energy_peratom"
-    atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn"] = "cgcnn"
+    atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "cgcnn"
     neighbor_strategy: Literal[
-        "k-nearest", "voronoi", "radius_graph", "ddg"
+        "k-nearest", "ddg"
     ] = "k-nearest"
     id_tag: Literal["jid", "id", "_oqmd_entry_id"] = "jid"
 

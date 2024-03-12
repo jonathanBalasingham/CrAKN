@@ -18,6 +18,7 @@ try:
     from ignite.contrib.handlers.stores import EpochOutputStore
 except Exception:
     from ignite.handlers.stores import EpochOutputStore
+
     pass
 
 from ignite.handlers import EarlyStopping
@@ -79,13 +80,6 @@ def make_standard_scalar_and_pca(output):
         sc.transform(y_pred.cpu().numpy()), device=y_pred.device
     )
     y = torch.tensor(sc.transform(y.cpu().numpy()), device=y.device)
-    # pc = pk.load(open("pca.pkl", "rb"))
-    # y_pred = torch.tensor(pc.transform(y_pred), device=device)
-    # y = torch.tensor(pc.transform(y), device=device)
-
-    # y_pred = torch.tensor(pca_sc.inverse_transform(y_pred),device=device)
-    # y = torch.tensor(pca_sc.inverse_transform(y),device=device)
-    # print (y.shape,y_pred.shape)
     return y_pred, y
 
 
@@ -132,11 +126,11 @@ def setup_optimizer(params, config: TrainingConfig):
 
 
 def train_dgl(
-    config: Union[TrainingConfig, Dict[str, Any]],
-    model: nn.Module = None,
-    # checkpoint_dir: Path = Path("./"),
-    train_val_test_loaders=[],
-    # log_tensorboard: bool = False,
+        config: Union[TrainingConfig, Dict[str, Any]],
+        model: nn.Module = None,
+        # checkpoint_dir: Path = Path("./"),
+        train_val_test_loaders=[],
+        # log_tensorboard: bool = False,
 ):
     """Training entry point for DGL networks.
 
@@ -186,12 +180,9 @@ def train_dgl(
         line_graph = True
     if config.backbone.name in alignn_models and config.backbone.alignn_layers > 0:
         line_graph = True
-    # print ('output_dir train', config.output_dir)
+
     if not train_val_test_loaders:
-        # use input standardization for all real-valued feature sets
-        # print("config.neighbor_strategy",config.neighbor_strategy)
-        # import sys
-        # sys.exit()
+
         (
             train_loader,
             val_loader,
@@ -232,17 +223,15 @@ def train_dgl(
         val_loader = train_val_test_loaders[1]
         test_loader = train_val_test_loaders[2]
         prepare_batch = train_val_test_loaders[3]
-    device = "cpu"
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    #device = "cpu"
+
+    device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
     prepare_batch = partial(prepare_batch, device=device)
     if classification:
         config.backbone.classification = True
     # define network, optimizer, scheduler
     _model = {
-        "simplegcn" : SimpleGCN
+        "simplegcn": SimpleGCN
     }
     if model is None:
         net = _model.get(config.backbone.name)(config.backbone)
@@ -274,10 +263,7 @@ def train_dgl(
             pct_start=0.3,
         )
     elif config.scheduler == "step":
-        # pct_start = config.warmup_steps / (config.epochs * steps_per_epoch)
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer,
-        )
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer,)
 
     if config.backbone.name == "alignn_atomwise":
         if config.random_seed is not None:
@@ -328,7 +314,7 @@ def train_dgl(
                         stress.append(np.mean(x))
                 if i["target_atomwise_pred"]:
                     for m, n in zip(
-                        i["target_atomwise_pred"], i["pred_atomwise_pred"]
+                            i["target_atomwise_pred"], i["pred_atomwise_pred"]
                     ):
                         x = np.abs(np.array(m) - np.array(n))
                         atomw.append(np.mean(x))
@@ -397,9 +383,9 @@ def train_dgl(
                     )
 
                 if (
-                    config.backbone.atomwise_output_features > 0
-                    # config.model.atomwise_output_features is not None
-                    and config.backbone.atomwise_weight != 0
+                        config.backbone.atomwise_output_features > 0
+                        # config.model.atomwise_output_features is not None
+                        and config.backbone.atomwise_weight != 0
                 ):
                     loss2 = config.backbone.atomwise_weight * criterion(
                         result["atomwise_pred"].to(device),
@@ -431,7 +417,6 @@ def train_dgl(
                     )
 
                 if config.backbone.stresswise_weight != 0:
-
                     loss4 = config.backbone.stresswise_weight * criterion(
                         (result["stresses"]).to(device),
                         torch.cat(tuple(dats[0].ndata["stresses"])).to(device),
@@ -510,8 +495,8 @@ def train_dgl(
                     )
 
                 if (
-                    config.backbone.atomwise_output_features > 0
-                    and config.backbone.atomwise_weight != 0
+                        config.backbone.atomwise_output_features > 0
+                        and config.backbone.atomwise_weight != 0
                 ):
                     loss2 = config.backbone.atomwise_weight * criterion(
                         result["atomwise_pred"].to(device),
@@ -778,7 +763,6 @@ def train_dgl(
         }
 
     if config.criterion == "zig":
-
         def zig_prediction_transform(x):
             output, y = x
             return criterion.predict(output), y
@@ -1030,9 +1014,9 @@ def train_dgl(
         )
 
     if (
-        config.write_predictions
-        and not classification
-        and config.backbone.output_features > 1
+            config.write_predictions
+            and not classification
+            and config.backbone.output_features > 1
     ):
         net.eval()
         mem = []
@@ -1060,9 +1044,9 @@ def train_dgl(
             data=mem,
         )
     if (
-        config.write_predictions
-        and not classification
-        and config.backbone.output_features == 1
+            config.write_predictions
+            and not classification
+            and config.backbone.output_features == 1
     ):
         net.eval()
         f = open(

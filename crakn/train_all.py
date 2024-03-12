@@ -26,7 +26,7 @@ if torch.cuda.is_available():
 device = "cpu"
 
 parser = argparse.ArgumentParser(
-    description="Atomistic Line Graph Neural Network"
+    description="Crystal Attribute Knowledge Network"
 )
 parser.add_argument(
     "--root_dir",
@@ -43,11 +43,6 @@ parser.add_argument(
     "--file_format", default="poscar", help="poscar/cif/xyz/pdb file format."
 )
 
-# parser.add_argument(
-#    "--keep_data_order",
-#    default=True,
-#    help="Whether to randomly shuffle samples, True/False",
-# )
 
 parser.add_argument(
     "--classification_threshold",
@@ -86,7 +81,6 @@ parser.add_argument(
 def train_for_folder(
     root_dir="examples/sample_data",
     config_name="config.json",
-    # keep_data_order=False,
     classification_threshold=None,
     batch_size=None,
     epochs=None,
@@ -95,7 +89,6 @@ def train_for_folder(
     output_dir=None,
 ):
     """Train for a folder."""
-    # config_dat=os.path.join(root_dir,config_name)
     id_prop_dat = os.path.join(root_dir, "id_prop.csv")
     config = loadjson(config_name)
     if type(config) is dict:

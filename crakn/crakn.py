@@ -1,4 +1,5 @@
 import amd
+
 from crakn.utils import BaseSettings
 from typing import Literal, Optional
 from pathlib import Path
@@ -11,6 +12,10 @@ class CrAKNConfig(BaseSettings):
     name: Literal["crakn"]
 
 
+def create_representation(structure, model):
+    pass
+
+
 def knowledge_graph(
         dataset=[],
         name: str = "dft_3d",
@@ -18,9 +23,7 @@ def knowledge_graph(
         cutoff: float = 8,
         max_neighbors: int = 12,
         cachedir: Optional[Path] = None,
-        use_canonize: bool = False,
-        id_tag="jid",
-        low_memory: bool = False
+        #config: TrainingConfig = None,
 ):
 
     if cachedir is not None:
@@ -34,7 +37,9 @@ def knowledge_graph(
         # print('dataset',dataset,type(dataset))
         print("Creating Knowledge Graph")
         graphs = []
+        representations = []
         periodic_sets = []
+        amds = []
         for ii, i in tqdm(dataset.iterrows()):
             atoms = i["atoms"]
             structure = (
@@ -43,7 +48,8 @@ def knowledge_graph(
             pmg = i["atoms"].pymatgen_converter()
             ps = amd.periodicset_from_pymatgen_structure(pmg)
             periodic_sets.append(ps)
-            graphs.append(g)
+            amds.append(amd.AMD(ps, k=max_neighbors))
+            representations.append(create_representation(structure, ))
 
         # df = pd.DataFrame(dataset)
         # print ('df',df)

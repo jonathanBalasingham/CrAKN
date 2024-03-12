@@ -28,10 +28,10 @@ tqdm.pandas()
 
 
 def load_dataset(
-    name: str = "dft_3d",
-    target=None,
-    limit: Optional[int] = None,
-    classification_threshold: Optional[float] = None,
+        name: str = "dft_3d",
+        target=None,
+        limit: Optional[int] = None,
+        classification_threshold: Optional[float] = None,
 ):
     """Load jarvis data."""
     d = jdata(name)
@@ -65,16 +65,16 @@ def mean_absolute_deviation(data, axis=None):
 
 
 def load_graphs(
-    dataset=[],
-    name: str = "dft_3d",
-    neighbor_strategy: str = "k-nearest",
-    cutoff: float = 8,
-    cutoff_extra: float = 3,
-    max_neighbors: int = 12,
-    cachedir: Optional[Path] = None,
-    use_canonize: bool = False,
-    id_tag="jid",
-    # extra_feats_json=None,
+        dataset=[],
+        name: str = "dft_3d",
+        neighbor_strategy: str = "k-nearest",
+        cutoff: float = 8,
+        cutoff_extra: float = 3,
+        max_neighbors: int = 12,
+        cachedir: Optional[Path] = None,
+        use_canonize: bool = False,
+        id_tag="jid",
+        # extra_feats_json=None,
 ):
     """Construct crystal graphs.
 
@@ -137,21 +137,21 @@ def load_graphs(
 
 
 def get_id_train_val_test(
-    total_size=1000,
-    split_seed=123,
-    train_ratio=None,
-    val_ratio=0.1,
-    test_ratio=0.1,
-    n_train=None,
-    n_test=None,
-    n_val=None,
-    keep_data_order=False,
+        total_size=1000,
+        split_seed=123,
+        train_ratio=None,
+        val_ratio=0.1,
+        test_ratio=0.1,
+        n_train=None,
+        n_test=None,
+        n_val=None,
+        keep_data_order=False,
 ):
     """Get train, val, test IDs."""
     if (
-        train_ratio is None
-        and val_ratio is not None
-        and test_ratio is not None
+            train_ratio is None
+            and val_ratio is not None
+            and test_ratio is not None
     ):
         if train_ratio is None:
             assert val_ratio + test_ratio < 1
@@ -170,7 +170,7 @@ def get_id_train_val_test(
     if not keep_data_order:
         random.seed(split_seed)
         random.shuffle(ids)
-    # np.random.shuffle(ids)
+
     if n_train + n_val + n_test > total_size:
         raise ValueError(
             "Check total number of samples.",
@@ -179,42 +179,34 @@ def get_id_train_val_test(
             total_size,
         )
 
-    # shuffle consistently with https://github.com/txie-93/cgcnn/data.py
-    # i.e. shuffle the index in place with standard library random.shuffle
-    # first obtain only valid indices
-
-    # test_size = round(N * 0.2)
-
-    # full train/val test split
-    # ids = ids[::-1]
     id_train = ids[:n_train]
     id_val = (
-        ids[-(n_val + n_test) : -n_test]
+        ids[-(n_val + n_test): -n_test]
         if n_test > 0
-        else ids[-(n_val + n_test) :]
+        else ids[-(n_val + n_test):]
     )  # noqa:E203
     id_test = ids[-n_test:] if n_test > 0 else []
     return id_train, id_val, id_test
 
 
 def get_torch_dataset(
-    dataset=[],
-    id_tag="jid",
-    target="",
-    target_atomwise="",
-    target_grad="",
-    target_stress="",
-    neighbor_strategy="",
-    atom_features="",
-    use_canonize="",
-    name="",
-    line_graph="",
-    cutoff=8.0,
-    cutoff_extra=3.0,
-    max_neighbors=12,
-    classification=False,
-    output_dir=".",
-    tmp_name="dataset",
+        dataset=[],
+        id_tag="jid",
+        target="",
+        target_atomwise="",
+        target_grad="",
+        target_stress="",
+        neighbor_strategy="",
+        atom_features="",
+        use_canonize="",
+        name="",
+        line_graph="",
+        cutoff=8.0,
+        cutoff_extra=3.0,
+        max_neighbors=12,
+        classification=False,
+        output_dir=".",
+        tmp_name="dataset",
 ):
     """Get Torch Dataset."""
     df = pd.DataFrame(dataset)
@@ -254,39 +246,39 @@ def get_torch_dataset(
 
 
 def get_train_val_loaders(
-    dataset: str = "dft_3d",
-    dataset_array=None,
-    target: str = "formation_energy_peratom",
-    target_atomwise: str = "",
-    target_grad: str = "",
-    target_stress: str = "",
-    atom_features: str = "cgcnn",
-    neighbor_strategy: str = "k-nearest",
-    n_train=None,
-    n_val=None,
-    n_test=None,
-    train_ratio=None,
-    val_ratio=0.1,
-    test_ratio=0.1,
-    batch_size: int = 5,
-    standardize: bool = False,
-    line_graph: bool = True,
-    split_seed: int = 123,
-    workers: int = 0,
-    pin_memory: bool = True,
-    save_dataloader: bool = False,
-    filename: str = "sample",
-    id_tag: str = "jid",
-    use_canonize: bool = False,
-    cutoff: float = 8.0,
-    cutoff_extra: float = 3.0,
-    max_neighbors: int = 12,
-    classification_threshold: Optional[float] = None,
-    target_multiplication_factor: Optional[float] = None,
-    standard_scalar_and_pca=False,
-    keep_data_order=False,
-    output_features=1,
-    output_dir=None,
+        dataset: str = "dft_3d",
+        dataset_array=None,
+        target: str = "formation_energy_peratom",
+        target_atomwise: str = "",
+        target_grad: str = "",
+        target_stress: str = "",
+        atom_features: str = "cgcnn",
+        neighbor_strategy: str = "k-nearest",
+        n_train=None,
+        n_val=None,
+        n_test=None,
+        train_ratio=None,
+        val_ratio=0.1,
+        test_ratio=0.1,
+        batch_size: int = 5,
+        standardize: bool = False,
+        line_graph: bool = True,
+        split_seed: int = 123,
+        workers: int = 0,
+        pin_memory: bool = True,
+        save_dataloader: bool = False,
+        filename: str = "sample",
+        id_tag: str = "jid",
+        use_canonize: bool = False,
+        cutoff: float = 8.0,
+        cutoff_extra: float = 3.0,
+        max_neighbors: int = 12,
+        classification_threshold: Optional[float] = None,
+        target_multiplication_factor: Optional[float] = None,
+        standard_scalar_and_pca=False,
+        keep_data_order=False,
+        output_features=1,
+        output_dir=None,
 ):
     """Help function to set up JARVIS train and val dataloaders."""
     train_sample = filename + "_train.data"
@@ -296,10 +288,10 @@ def get_train_val_loaders(
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     if (
-        os.path.exists(train_sample)
-        and os.path.exists(val_sample)
-        and os.path.exists(test_sample)
-        and save_dataloader
+            os.path.exists(train_sample)
+            and os.path.exists(val_sample)
+            and os.path.exists(test_sample)
+            and save_dataloader
     ):
         print("Loading from saved file...")
         print("Make sure all the DataLoader params are same.")
@@ -319,14 +311,8 @@ def get_train_val_loaders(
             test_loader.num_workers = workers
         if val_loader.num_workers != workers:
             val_loader.num_workers = workers
-        # print("train", len(train_loader.dataset))
-        # print("val", len(val_loader.dataset))
-        # print("test", len(test_loader.dataset))
     else:
         d = jdata(dataset) if dataset_array is None else dataset_array
-
-        # for ii, i in enumerate(pc_y):
-        #    d[ii][target] = pc_y[ii].tolist()
 
         dat = []
         if classification_threshold is not None:
@@ -340,37 +326,15 @@ def get_train_val_loaders(
             print("Converting target data into 1 and 0.")
         all_targets = []
 
-        # TODO:make an all key in qm9_dgl
-        if dataset == "qm9_dgl" and target == "all":
-            print("Making all qm9_dgl")
-            tmp = []
-            for ii in d:
-                ii["all"] = [
-                    ii["mu"],
-                    ii["alpha"],
-                    ii["homo"],
-                    ii["lumo"],
-                    ii["gap"],
-                    ii["r2"],
-                    ii["zpve"],
-                    ii["U0"],
-                    ii["U"],
-                    ii["H"],
-                    ii["G"],
-                    ii["Cv"],
-                ]
-                tmp.append(ii)
-            print("Made all qm9_dgl")
-            d = tmp
         for i in d:
             if isinstance(i[target], list):  # multioutput target
                 all_targets.append(torch.tensor(i[target]))
                 dat.append(i)
 
             elif (
-                i[target] is not None
-                and i[target] != "na"
-                and not math.isnan(i[target])
+                    i[target] is not None
+                    and i[target] != "na"
+                    and not math.isnan(i[target])
             ):
                 if target_multiplication_factor is not None:
                     i[target] = i[target] * target_multiplication_factor
@@ -431,17 +395,8 @@ def get_train_val_loaders(
             except Exception as exp:
                 print(exp)
                 pass
-            # pc = PCA(n_components=output_features)
-            # pipe = Pipeline(
-            #    [
-            #        ("scale", StandardScaler()),
-            #        ("reduce_dims", PCA(n_components=output_features)),
-            #    ]
-            # )
+
             pk.dump(sc, open(os.path.join(output_dir, "sc.pkl"), "wb"))
-            # pc = PCA(n_components=10)
-            # pc.fit(y_data)
-            # pk.dump(pc, open("pca.pkl", "wb"))
 
         if classification_threshold is None:
             try:
@@ -455,9 +410,9 @@ def get_train_val_loaders(
                     line = "MAX val:" + str(max(all_targets)) + "\n"
                     line += "MIN val:" + str(min(all_targets)) + "\n"
                     line += (
-                        "MAD val:"
-                        + str(mean_absolute_deviation(all_targets))
-                        + "\n"
+                            "MAD val:"
+                            + str(mean_absolute_deviation(all_targets))
+                            + "\n"
                     )
                     f.write(line)
                     f.close()

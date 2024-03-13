@@ -46,6 +46,7 @@ def knowledge_graph(structures, targets,
     else:
         raise NotImplementedError(f"Crystal representation: {crystal_representation}, not implemented")
 
+    g.ndata["target"] = torch.Tensor(targets)
     if not add_edges:
         return g
     else:

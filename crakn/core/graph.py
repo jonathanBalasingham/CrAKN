@@ -41,8 +41,8 @@ def knowledge_graph(structures, targets,
     if crystal_representation == "PST":
         pdds = [amd.PDD(ps, k=metric_knn) for ps in tqdm(periodic_sets, "Calculating PDDs..")]
         compositions = [np.array(ps.types)[:, None] for ps in tqdm(periodic_sets, "Retrieving compositions..")]
-        g.ndata["composition"] = torch.Tensor(compositions)
-        g.ndata["pdd"] = torch.Tensor(pdds)
+        g.ndata["composition"] = torch.nested.nested_tensor(compositions)
+        g.ndata["pdd"] = torch.nested.nested_tensor(pdds)
     else:
         raise NotImplementedError(f"Crystal representation: {crystal_representation}, not implemented")
 

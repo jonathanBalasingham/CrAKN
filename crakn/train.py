@@ -397,12 +397,6 @@ def train_dgl(
                     info["pred_atomwise_pred"] = (
                         result["atomwise_pred"].cpu().detach().numpy().tolist()
                     )
-                    # atomlevel_loss += np.mean(
-                    #    np.abs(
-                    #        dats[0].ndata["atomwise_target"].cpu().numpy()
-                    #        - result["atomwise_pred"].cpu().detach().numpy()
-                    #    )
-                    # )
 
                 if config.backbone.calculate_gradient:
                     loss3 = config.backbone.gradwise_weight * criterion(

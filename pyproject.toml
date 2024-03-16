@@ -38,3 +38,8 @@ dependencies = {file = ["requirements.txt"]}
 
 [tool.setuptools]
 script-files = ["crakn/train_all.py"]
+
+[tool.hatch.build]
+include = [
+  "crakn/data/*.csv",
+]

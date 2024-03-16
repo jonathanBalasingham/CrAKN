@@ -5,9 +5,11 @@ from typing import Optional, Union
 import os
 from pydantic import model_validator
 from typing import Literal
+
+from crakn.backbones.pst import PSTConfig
 from crakn.utils import BaseSettings
 from crakn.backbones.gcn import SimpleGCNConfig
-from crakn.crakn import CrAKNConfig
+from .model import CrAKNConfig
 
 try:
     VERSION = (
@@ -152,9 +154,9 @@ class TrainingConfig(BaseSettings):
     test_ratio: Optional[float] = 0.1
     target_multiplication_factor: Optional[float] = None
     epochs: int = 300
-    batch_size: int = 64
+    batch_size: int = 32
     weight_decay: float = 0
-    learning_rate: float = 1e-2
+    learning_rate: float = 1e-3
     filename: str = "sample"
     warmup_steps: int = 2000
     criterion: Literal["mse", "l1", "poisson", "zig"] = "mse"
@@ -181,17 +183,13 @@ class TrainingConfig(BaseSettings):
     output_dir: str = os.path.abspath(".")
 
     # model configuration
-    backbone: Union[
-        #CGCNNConfig,
-        SimpleGCNConfig,
-        #CrAKNConfig,  TODO: Add this
-    ] = SimpleGCNConfig(name="simplegcn")
+    base_config: CrAKNConfig = CrAKNConfig()
 
     @model_validator(mode="after")
     @classmethod
     def set_input_size(cls, values):
         """Automatically configure node feature dimensionality."""
-        values.backbone.atom_input_features = FEATURESET_SIZE[
+        values.base_config.backbone_config.atom_input_features = FEATURESET_SIZE[
             values.atom_features
         ]
 

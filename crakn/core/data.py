@@ -1,5 +1,15 @@
+from functools import partial
+
+import amd
+import numpy as np
+from tqdm import tqdm
+
+from crakn.backbones.pst import PSTData
 from crakn.core.config import TrainingConfig
-from typing import List
+
+from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler, SequentialSampler
+from typing import List, Tuple, Union
 from pymatgen.core.structure import Structure
 from jarvis.db.figshare import data
 from jarvis.core.atoms import Atoms
@@ -28,43 +38,117 @@ def retrieve_data(config: TrainingConfig) -> tuple[List[Structure], List[float]]
     return structures, targets
 
 
-class StructureDataset(torch.utils.data.Dataset):
-    """Dataset of crystal DGLGraphs."""
+def get_dataset(structures, targets, config):
+    if config.name == "PST":
+        return PSTData(structures, targets, config)
+    else:
+        raise NotImplementedError(f"Not implemented yet, {config.name}")
 
-    def __init__(self, kg: dgl.DGLGraph, id_tag="jid"):
-        """Pytorch Dataset for CrAKN.
 
-        """
+class CrAKNDataset(torch.utils.data.Dataset):
+
+    def __init__(self, structures, targets, config: TrainingConfig):
+        super().__init__()
+        self.data = get_dataset(structures, targets, config.base_config.backbone_config)
+
+        periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in
+                         tqdm(structures, desc="Creating Periodic Sets..")]
+
+        self.amds = np.vstack([amd.AMD(ps, k=config.base_config.amd_k)
+                               for ps in tqdm(periodic_sets, desc="Calculating AMDs..")])
+        self.lattices = np.array([list(s.lattice.parameters)
+                                  for s in tqdm(structures, desc="Retrieving lattices..")])
+        self.targets = targets
 
     def __len__(self):
         """Get length."""
-        return self.kg.num_nodes()
+        return len(self.data)
 
     def __getitem__(self, idx):
         """Get StructureDataset sample."""
-        return self.kg.sub_graph(idx)
+        return (self.data[idx], torch.Tensor(self.amds[idx]), torch.Tensor(self.lattices[idx]),
+                torch.Tensor([self.targets[idx]]))
 
-    @staticmethod
-    def collate(samples: List[Tuple[dgl.DGLGraph, torch.Tensor]]):
-        """Dataloader helper to batch graphs cross `samples`."""
-        graphs, labels = map(list, zip(*samples))
-        batched_graph = dgl.batch(graphs)
-        return batched_graph, torch.tensor(labels)
 
-    @staticmethod
-    def collate_line_graph(
-            samples: List[Tuple[dgl.DGLGraph, dgl.DGLGraph, torch.Tensor]]
-    ):
-        """Dataloader helper to batch graphs cross `samples`."""
-        graphs, line_graphs, labels = map(list, zip(*samples))
-        batched_graph = dgl.batch(graphs)
-        batched_line_graph = dgl.batch(line_graphs)
-        if len(labels[0].size()) > 0:
-            return batched_graph, batched_line_graph, torch.stack(labels)
+def collate_crakn_data(dataset_list, internal_collate=PSTData.collate_fn):
+    backbone_data = []
+    lattices = []
+    amds = []
+    targets = []
+
+    for bd, amd_fea, latt, target in dataset_list:
+        backbone_data.append(bd)
+        amds.append(amd_fea)
+        lattices.append(latt)
+        targets.append(target)
+
+    return (internal_collate(backbone_data),
+            torch.stack(amds, dim=0),
+            torch.stack(lattices, dim=0),
+            torch.stack(targets, dim=0))
+
+
+def prepare_crakn_batch(batch, device=None, internal_prepare_batch=None, non_blocking=False):
+    batch = (
+        (internal_prepare_batch(batch[0], device=device, non_blocking=non_blocking),
+         batch[1].to(device=device, non_blocking=non_blocking),
+         batch[2].to(device=device, non_blocking=non_blocking)),
+        batch[3].to(device=device, non_blocking=non_blocking)
+    )
+    return batch
+
+
+def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
+    total_size = len(dataset)
+
+    if config.n_train is None:
+        if config.train_ratio is None:
+            assert config.val_ratio + config.test_ratio < 1
+            train_ratio = 1 - config.val_ratio - config.test_ratio
+            print(f'[Warning] train_ratio is None, using 1 - val_ratio - '
+                  f'test_ratio = {train_ratio} as training data.')
         else:
-            return batched_graph, batched_line_graph, torch.tensor(labels)
+            assert config.train_ratio + config.val_ratio + config.test_ratio <= 1
+            train_ratio = config.train_ratio
+    indices = list(range(total_size))
+    if config.n_train:
+        train_size = config.n_train
+    else:
+        train_size = int(train_ratio * total_size)
+    if config.n_test:
+        test_size = config.n_test
+    else:
+        test_size = int(config.test_ratio * total_size)
+    if config.n_val:
+        valid_size = config.n_val
+    else:
+        valid_size = int(config.val_ratio * total_size)
+    train_sampler = SubsetRandomSampler(indices[:train_size])
+    val_sampler = SubsetRandomSampler(
+        indices[-(valid_size + test_size):-test_size])
+
+    test_sampler = SequentialSampler(indices[-test_size:])
+    collate_fn = partial(collate_crakn_data, internal_collate=dataset.data.collate_fn)
+
+    train_loader = DataLoader(dataset, batch_size=config.batch_size,
+                              sampler=train_sampler,
+                              num_workers=config.num_workers,
+                              collate_fn=collate_fn, pin_memory=config.pin_memory,
+                              shuffle=False)
+    val_loader = DataLoader(dataset, batch_size=config.batch_size,
+                            sampler=val_sampler,
+                            num_workers=config.num_workers,
+                            collate_fn=collate_fn, pin_memory=config.pin_memory,
+                            shuffle=False)
+
+    test_loader = DataLoader(dataset, batch_size=config.batch_size,
+                             sampler=test_sampler,
+                             num_workers=config.num_workers,
+                             collate_fn=collate_fn, pin_memory=config.pin_memory)
+    return train_loader, val_loader, test_loader
 
 
 if __name__ == "__main__":
     fake_config = TrainingConfig()
     structures, targets = retrieve_data(fake_config)
+    dataset = CrAKNDataset(structures, targets, fake_config)

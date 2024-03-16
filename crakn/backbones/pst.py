@@ -1,16 +1,26 @@
+from typing import Literal, Tuple, List
+
+import amd
 import torch
 import torch.nn as nn
 import json
 import numpy as np
 import pandas as pd
 import math
+
+from torch.nn.utils.rnn import pad_sequence
+from tqdm import tqdm
+from pathlib import Path
+
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
 
 class PSTConfig(BaseSettings):
     """Hyperparameter schema for jarvisdgl.models.gcn."""
+    name: Literal["PST"] = "PST"
     atom_features: str = "mat2vec"
+    atom_input_features: int = 200
     encoders: int = 4
     num_heads: int = 4
     embedding_features: int = 64
@@ -18,9 +28,10 @@ class PSTConfig(BaseSettings):
     dropout: float = 0
     attention_dropout: float = 0
     use_cuda: bool = torch.cuda.is_available()
-    decoder_layers = 1
+    decoder_layers: int = 1
     expansion_size: int = 10
     k: int = 15
+    collapse_tol: float = 1e-4
     atom_encoding: str = "mat2vec"
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
@@ -164,7 +175,7 @@ class PeriodicSetTransformer(nn.Module):
                                       for _ in range(config.decoder_layers - 1)])
         self.activations = nn.ModuleList([nn.Mish()
                                           for _ in range(config.decoder_layers - 1)])
-        self.out = nn.Linear(config.embedding_features, 1)
+        self.out = nn.Linear(config.embedding_features, config.output_features)
 
     def forward(self, features):
         str_fea, comp_fea = features
@@ -181,10 +192,7 @@ class PeriodicSetTransformer(nn.Module):
         for encoder in self.encoders:
             x = encoder(x, weights)
 
-        if self.use_weighted_pooling:
-            x = torch.sum(weights * (x + x_init), dim=1)
-        else:
-            x = torch.mean(x + x_init, dim=1)
+        x = torch.sum(weights * (x + x_init), dim=1)
 
         x = self.ln2(x)
         for layer, activation in zip(self.decoder, self.activations):
@@ -197,11 +205,13 @@ class PeriodicSetTransformer(nn.Module):
 class AtomFeaturizer(nn.Module):
     def __init__(self, id_prop_file="mat2vec.csv", use_cuda=True):
         super(AtomFeaturizer, self).__init__()
+        path = Path(__file__).parent.parent / 'data' / id_prop_file
+
         if id_prop_file == "mat2vec.csv":
-            af = pd.read_csv("mat2vec.csv").to_numpy()[:, 1:].astype("float32")
+            af = pd.read_csv(path).to_numpy()[:, 1:].astype("float32")
             af = np.vstack([np.zeros(200), af, np.ones(200)])
         else:
-            with open(id_prop_file) as f:
+            with open(path) as f:
                 atom_fea = json.load(f)
             af = np.vstack([i for i in atom_fea.values()])
             af = np.vstack([np.zeros(92), af, np.ones(92)])  # last is the mask, first is for padding
@@ -227,3 +237,84 @@ class DistanceExpansion(nn.Module):
     def forward(self, x):
         out = (1 - (x.flatten().reshape((-1, 1)) - self.starter)) ** 2
         return out.reshape((x.shape[0], x.shape[1], x.shape[2] * self.size))
+
+
+def preprocess_pdds(pdds_):
+    min_pdd = np.min(np.vstack([np.min(pdd, axis=0) for pdd in pdds_]), axis=0)
+    max_pdd = np.max(np.vstack([np.max(pdd, axis=0) for pdd in pdds_]), axis=0)
+    pdds = [np.hstack(
+        [pdd[:, 0, None], (pdd[:, 1:] - min_pdd[1:]) / (max_pdd[1:] - min_pdd[1:])]) for
+        pdd
+        in pdds_]
+    return pdds
+
+
+class PSTData(torch.utils.data.Dataset):
+    def __init__(self, structures, targets, config: PSTConfig):
+        self.k = int(config.k)
+        self.collapse_tol = float(config.collapse_tol)
+        self.id_prop_data = targets
+        pdds = []
+        periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in structures]
+        atom_fea = []
+        for i in tqdm(range(len(periodic_sets)),
+                      desc="Creating PDDs…",
+                      ascii=False, ncols=75):
+            ps = periodic_sets[i]
+            pdd = amd.PDD(ps, k=self.k, collapse=False, collapse_tol=self.collapse_tol)
+            atom_features = ps.types[ps.asym_unit][:, None]
+            atom_fea.append(atom_features)
+            pdds.append(pdd)
+
+        self.pdds = preprocess_pdds(pdds)
+        self.atom_fea = atom_fea
+
+    def __len__(self):
+        return len(self.id_prop_data)
+
+    def __getitem__(self, idx):
+        cif_id, target = self.id_prop_data[idx], self.id_prop_data[idx]
+        return torch.Tensor(self.pdds[idx]), \
+            torch.Tensor(self.atom_fea[idx]), \
+            torch.Tensor([float(target)]), \
+            cif_id
+
+    @staticmethod
+    def collate_fn(dataset_list):
+        batch_fea = []
+        composition_fea = []
+        batch_target = []
+        batch_cif_ids = []
+
+        for i, (structure_features, comp_features, target, cif_id) in enumerate(dataset_list):
+            batch_fea.append(structure_features)
+            composition_fea.append(comp_features)
+            batch_target.append(target)
+            batch_cif_ids.append(cif_id)
+
+        return (pad_sequence(batch_fea, batch_first=True),
+                pad_sequence(composition_fea, batch_first=True)), \
+            torch.stack(batch_target, dim=0), \
+            batch_cif_ids
+
+    @staticmethod
+    def prepare_batch(
+            batch: Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor, List], device=None, non_blocking=False
+    ):
+        """Send batched dgl crystal graph to device."""
+        (pdd, comp), t, _ = batch
+        batch = (
+            pdd.to(device, non_blocking=non_blocking),
+            comp.to(device, non_blocking=non_blocking),
+            t.to(device, non_blocking=non_blocking)
+        )
+        return batch
+
+
+if __name__ == '__main__':
+    from crakn.core.data import retrieve_data
+    from crakn.core.config import TrainingConfig
+    config = TrainingConfig()
+    structures, targets = retrieve_data(config)
+    pst_dataset = PSTData(structures, targets, config.backbone)
+    pst = PeriodicSetTransformer()

@@ -1,9 +1,9 @@
 .idea
 venv
-data
 .python-version
 crakn/__pycache__
 crakn/backbones/__pycache__
+crakn/data/jarvis
 CrAKN.egg-info
 crakn/core/__pycache__
 res.txt

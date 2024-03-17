@@ -133,7 +133,7 @@ class TrainingConfig(BaseSettings):
         "dft_3d_2021",
         "dft_2d",
         "matbench"
-    ] = "dft_2d"
+    ] = "dft_3d"
     target: TARGET_ENUM = "formation_energy_peratom"
     atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "cgcnn"
     neighbor_strategy: Literal[

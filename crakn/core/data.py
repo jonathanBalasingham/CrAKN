@@ -18,7 +18,7 @@ import torch
 import dgl
 
 
-def retrieve_data(config: TrainingConfig) -> tuple[List[Structure], List[float], List]:
+def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float], List]:
     if config.dataset == "matbench":
         pass
     else:

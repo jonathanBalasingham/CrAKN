@@ -153,13 +153,13 @@ class TrainingConfig(BaseSettings):
     val_ratio: Optional[float] = 0.1
     test_ratio: Optional[float] = 0.1
     target_multiplication_factor: Optional[float] = None
-    epochs: int = 1
+    epochs: int = 500
     batch_size: int = 64
     weight_decay: float = 0
-    learning_rate: float = 1e-3
+    learning_rate: float = 1e-4
     filename: str = "sample"
     warmup_steps: int = 2000
-    criterion: Literal["mse", "l1", "poisson", "zig"] = "mse"
+    criterion: Literal["mse", "l1", "poisson", "zig"] = "l1"
     optimizer: Literal["adamw", "sgd"] = "adamw"
     scheduler: Literal["onecycle", "none"] = "onecycle"
     pin_memory: bool = False

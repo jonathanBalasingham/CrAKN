@@ -1,4 +1,4 @@
-from functools import partial
+from functools import partial, reduce
 
 from typing import Any, Dict, Union
 import ignite
@@ -152,7 +152,7 @@ def train_crakn(
         ignite.utils.manual_seed(config.random_seed)
 
     structures, targets, ids = retrieve_data(config)
-    dataset = CrAKNDataset(structures, targets, config)
+    dataset = CrAKNDataset(structures, targets, ids, config)
     train_loader, val_loader, test_loader = get_dataloader(dataset, config)
 
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
@@ -459,10 +459,20 @@ def train_crakn(
         targets = []
         predictions = []
         with torch.no_grad():
-            ids = test_loader.dataset.ids  # [test_loader.dataset.indices]
-            for dat, id in zip(test_loader, ids):
-                g, lg, target = dat
-                out_data = net([g.to(device), lg.to(device)])
+            for dat in test_loader:
+                bb_data, amds, latt, ids, target = dat
+
+                out_data = net(
+                    ([
+                      bb_data[0][0].to(device),
+                      bb_data[0][1].to(device),
+                      bb_data[1].to(device),
+                    ],
+                    amds.to(device),
+                    latt.to(device),
+                    ids),
+                )
+
                 out_data = out_data.cpu().numpy().tolist()
                 if config.standard_scalar_and_pca:
                     sc = pk.load(
@@ -474,9 +484,19 @@ def train_crakn(
                 target = target.cpu().numpy().flatten().tolist()
                 if len(target) == 1:
                     target = target[0]
-                f.write("%s, %6f, %6f\n" % (id, target, out_data))
-                targets.append(target)
-                predictions.append(out_data)
+
+                if isinstance(targets, list):
+                    targets += target
+                    if isinstance(out_data[0], list):
+                        out_data = [od[0] for od in out_data]
+
+                    predictions += out_data
+                    for id, t, p in zip(ids, target, out_data):
+                        f.write("%s, %6f, %6f\n" % (id, t, p))
+                else:
+                    f.write("%s, %6f, %6f\n" % (id, target, out_data))
+                    targets.append(target)
+                    predictions.append(out_data)
         f.close()
 
         print("Test MAE:",
@@ -493,9 +513,11 @@ def train_crakn(
             target_vals, predictions = [], []
 
             for tgt, pred in history["trainEOS"]:
-                target_vals.append(tgt.cpu().numpy().tolist())
-                predictions.append(pred.cpu().numpy().tolist())
+                target_vals.append(tgt.cpu().numpy().flatten().tolist())
+                predictions.append(pred.cpu().numpy().flatten().tolist())
 
+            target_vals = reduce(lambda x, y: x + y, target_vals)
+            predictions = reduce(lambda x, y: x + y, predictions)
             target_vals = np.array(target_vals, dtype="float").flatten()
             predictions = np.array(predictions, dtype="float").flatten()
 

@@ -36,7 +36,7 @@ def retrieve_data(config: TrainingConfig) -> tuple[List[Structure], List[float],
         if not isinstance(target, float):
             continue
 
-        if 'jid' in target:
+        if 'jid' in targets:
             ids.append(target['jid'])
         else:
             ids.append(current_id)
@@ -57,7 +57,7 @@ def get_dataset(structures, targets, config):
 
 class CrAKNDataset(torch.utils.data.Dataset):
 
-    def __init__(self, structures, targets, config: TrainingConfig):
+    def __init__(self, structures, targets, ids, config: TrainingConfig):
         super().__init__()
         self.data = get_dataset(structures, targets, config.base_config.backbone_config)
 
@@ -69,6 +69,7 @@ class CrAKNDataset(torch.utils.data.Dataset):
         self.lattices = np.array([list(s.lattice.parameters)
                                   for s in tqdm(structures, desc="Retrieving lattices..")])
         self.targets = targets
+        self.ids = ids
 
     def __len__(self):
         """Get length."""
@@ -77,7 +78,7 @@ class CrAKNDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         """Get StructureDataset sample."""
         return (self.data[idx], torch.Tensor(self.amds[idx]), torch.Tensor(self.lattices[idx]),
-                torch.Tensor([self.targets[idx]]))
+                self.ids[idx], torch.Tensor([self.targets[idx]]))
 
 
 def collate_crakn_data(dataset_list, internal_collate=PSTData.collate_fn):
@@ -85,16 +86,19 @@ def collate_crakn_data(dataset_list, internal_collate=PSTData.collate_fn):
     lattices = []
     amds = []
     targets = []
+    ids = []
 
-    for bd, amd_fea, latt, target in dataset_list:
+    for bd, amd_fea, latt, datum_id, target in dataset_list:
         backbone_data.append(bd)
         amds.append(amd_fea)
         lattices.append(latt)
         targets.append(target)
+        ids.append(datum_id)
 
     return (internal_collate(backbone_data),
             torch.stack(amds, dim=0),
             torch.stack(lattices, dim=0),
+            ids,
             torch.stack(targets, dim=0))
 
 
@@ -102,8 +106,9 @@ def prepare_crakn_batch(batch, device=None, internal_prepare_batch=None, non_blo
     batch = (
         (internal_prepare_batch(batch[0], device=device, non_blocking=non_blocking),
          batch[1].to(device=device, non_blocking=non_blocking),
-         batch[2].to(device=device, non_blocking=non_blocking)),
-        batch[3].to(device=device, non_blocking=non_blocking)
+         batch[2].to(device=device, non_blocking=non_blocking),
+         batch[3]),
+        batch[4].to(device=device, non_blocking=non_blocking),
     )
     return batch
 
@@ -161,4 +166,4 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
 if __name__ == "__main__":
     fake_config = TrainingConfig()
     structures, targets, ids = retrieve_data(fake_config)
-    dataset = CrAKNDataset(structures, targets, fake_config)
+    dataset = CrAKNDataset(structures, targets, ids, fake_config)

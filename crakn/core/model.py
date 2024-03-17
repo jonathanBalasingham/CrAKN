@@ -151,8 +151,8 @@ class CrAKN(nn.Module):
         self.out = nn.Linear(config.embedding_dim, config.output_features)
         self.bn = nn.BatchNorm1d(config.embedding_dim)
 
-    def forward(self, inputs) -> torch.Tensor:
-        backbone_input, amds, latt = inputs
+    def forward(self, inputs, neighbors=None) -> torch.Tensor:
+        backbone_input, amds, latt, _ = inputs
         data = backbone_input[:-1]
         node_features = self.backbone(data)
         node_features = self.embedding(node_features)

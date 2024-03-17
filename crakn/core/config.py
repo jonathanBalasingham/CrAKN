@@ -135,7 +135,7 @@ class TrainingConfig(BaseSettings):
         "matbench"
     ] = "dft_3d"
     target: TARGET_ENUM = "formation_energy_peratom"
-    atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "cgcnn"
+    atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "mat2vec"
     neighbor_strategy: Literal[
         "k-nearest", "ddg"
     ] = "k-nearest"

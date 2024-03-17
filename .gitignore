@@ -6,3 +6,10 @@ crakn/__pycache__
 crakn/backbones/__pycache__
 CrAKN.egg-info
 crakn/core/__pycache__
+res.txt
+history_train.json
+history_val.json
+best_model.pt
+checkpoint_*
+prediction_results_test_set.csv
+prediction_results_train_set.csv

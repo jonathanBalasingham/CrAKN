@@ -31,6 +31,8 @@ def retrieve_data(config: TrainingConfig) -> tuple[List[Structure], List[float]]
             raise ValueError(f"Unknown target {config.target}")
 
         target = datum[config.target]
+        if not isinstance(target, float):
+            continue
         atoms = (Atoms.from_dict(datum["atoms"]) if isinstance(datum["atoms"], dict) else datum["atoms"])
         structure = atoms.pymatgen_converter()
         structures.append(structure)

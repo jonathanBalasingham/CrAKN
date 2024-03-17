@@ -133,8 +133,8 @@ class TrainingConfig(BaseSettings):
         "jdft_3d-8-18-2021",
         "dft_2d",
         "matbench"
-    ] = "dft_2d"
-    target: TARGET_ENUM = "formation_energy_peratom"
+    ] = "dft_3d"
+    target: TARGET_ENUM = "mbj_bandgap"
     atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "cgcnn"
     neighbor_strategy: Literal[
         "k-nearest", "ddg"

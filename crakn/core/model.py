@@ -162,5 +162,4 @@ class CrAKN(nn.Module):
             x = self.ln2(x + temp_x)
             bias = self.ln2(bias + temp_bias)
 
-        x = self.bn(x)
         return self.out(x)

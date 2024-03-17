@@ -28,7 +28,7 @@ def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float],
     targets: List[float] = []
     ids = []
     current_id = 0
-    for datum in d:
+    for datum in tqdm(d, desc="Retrieving data.."):
         if config.target not in datum.keys():
             raise ValueError(f"Unknown target {config.target}")
 

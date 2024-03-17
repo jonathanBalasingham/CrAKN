@@ -151,7 +151,7 @@ def train_crakn(
         deterministic = True
         ignite.utils.manual_seed(config.random_seed)
 
-    structures, targets = retrieve_data(config)
+    structures, targets, ids = retrieve_data(config)
     dataset = CrAKNDataset(structures, targets, config)
     train_loader, val_loader, test_loader = get_dataloader(dataset, config)
 

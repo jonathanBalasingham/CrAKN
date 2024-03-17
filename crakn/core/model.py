@@ -61,6 +61,8 @@ class CrAKNAttention(nn.Module):
         self.embedding = nn.Linear(input_dim, num_heads * head_dim)
         self.bias_embedding = nn.Sequential(nn.Linear(input_dim, head_dim * num_heads),
                                             nn.Mish())
+        self.diff_embedding = nn.Sequential(nn.Linear(head_dim * num_heads, head_dim * num_heads),
+                                            nn.Mish())
         self.qkv_proj = nn.Linear(input_dim, 3 * num_heads * head_dim)
         self.o_proj = nn.Linear(num_heads * head_dim, input_dim)
         self.bias_out = nn.Sequential(nn.Linear(head_dim * num_heads, input_dim),
@@ -97,7 +99,7 @@ class CrAKNAttention(nn.Module):
 
         if bias is not None:
             bias = self.bias_embedding(bias)
-            diffs = bias[None, :, :] - bias[:, None, :]
+            diffs = self.diff_embedding(bias[None, :, :] - bias[:, None, :])
             diffs = diffs.reshape(seq_length, seq_length, self.num_heads, self.head_dim)
             diffs = torch.norm(diffs, dim=-1)
             diffs = diffs.reshape(seq_length, seq_length, self.num_heads)

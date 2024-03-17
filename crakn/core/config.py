@@ -130,11 +130,11 @@ class TrainingConfig(BaseSettings):
     # dataset configuration
     dataset: Literal[
         "dft_3d",
-        "jdft_3d-8-18-2021",
+        "dft_3d_2021",
         "dft_2d",
         "matbench"
-    ] = "dft_3d"
-    target: TARGET_ENUM = "mbj_bandgap"
+    ] = "dft_2d"
+    target: TARGET_ENUM = "formation_energy_peratom"
     atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "cgcnn"
     neighbor_strategy: Literal[
         "k-nearest", "ddg"
@@ -153,7 +153,7 @@ class TrainingConfig(BaseSettings):
     val_ratio: Optional[float] = 0.1
     test_ratio: Optional[float] = 0.1
     target_multiplication_factor: Optional[float] = None
-    epochs: int = 300
+    epochs: int = 1
     batch_size: int = 32
     weight_decay: float = 0
     learning_rate: float = 1e-3

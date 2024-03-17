@@ -18,7 +18,7 @@ import torch
 import dgl
 
 
-def retrieve_data(config: TrainingConfig) -> tuple[List[Structure], List[float]]:
+def retrieve_data(config: TrainingConfig) -> tuple[List[Structure], List[float], List]:
     if config.dataset == "matbench":
         pass
     else:
@@ -26,6 +26,8 @@ def retrieve_data(config: TrainingConfig) -> tuple[List[Structure], List[float]]
 
     structures: List[Structure] = []
     targets: List[float] = []
+    ids = []
+    current_id = 0
     for datum in d:
         if config.target not in datum.keys():
             raise ValueError(f"Unknown target {config.target}")
@@ -33,11 +35,17 @@ def retrieve_data(config: TrainingConfig) -> tuple[List[Structure], List[float]]
         target = datum[config.target]
         if not isinstance(target, float):
             continue
+
+        if 'jid' in target:
+            ids.append(target['jid'])
+        else:
+            ids.append(current_id)
+            current_id += 1
         atoms = (Atoms.from_dict(datum["atoms"]) if isinstance(datum["atoms"], dict) else datum["atoms"])
         structure = atoms.pymatgen_converter()
         structures.append(structure)
         targets.append(target)
-    return structures, targets
+    return structures, targets, ids
 
 
 def get_dataset(structures, targets, config):
@@ -152,5 +160,5 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
 
 if __name__ == "__main__":
     fake_config = TrainingConfig()
-    structures, targets = retrieve_data(fake_config)
+    structures, targets, ids = retrieve_data(fake_config)
     dataset = CrAKNDataset(structures, targets, fake_config)

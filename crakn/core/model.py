@@ -95,6 +95,7 @@ class CrAKNAttention(nn.Module):
         seq_length = x.size()[0]
         if mask is not None:
             mask = expand_mask(mask)
+
         qkv = self.qkv_proj(x)
 
         if bias is not None:
@@ -141,10 +142,11 @@ class CrAKN(nn.Module):
         super().__init__()
         self.backbone = get_backbone(config.backbone, bb_config=config.backbone_config)
         self.retrieve_data = get_data_retriever(config.backbone)
-        #self.layers = [CrAKNLayer(config.embedding_dim) for _ in range(config.layers)]
+        # self.layers = [CrAKNLayer(config.embedding_dim) for _ in range(config.layers)]
         self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim)
-        self.layers = [CrAKNAttention(config.embedding_dim, config.num_heads, config.head_dim, config.dropout)
-                       for _ in range(config.layers)]
+        self.layers = nn.ModuleList(
+            [CrAKNAttention(config.embedding_dim, config.num_heads, config.head_dim, config.dropout)
+             for _ in range(config.layers)])
         self.bias_embedding = nn.Linear(config.amd_k, config.embedding_dim)
         self.ln1 = nn.LayerNorm(config.embedding_dim)
         self.ln2 = nn.LayerNorm(config.embedding_dim)
@@ -153,12 +155,14 @@ class CrAKN(nn.Module):
 
     def forward(self, inputs, neighbors=None) -> torch.Tensor:
         backbone_input, amds, latt, _ = inputs
+
         data = backbone_input[:-1]
         node_features = self.backbone(data)
         node_features = self.embedding(node_features)
         bias = self.bias_embedding(amds)
 
         x = self.ln1(node_features)
+
         for layer in self.layers:
             temp_x, temp_bias = layer(x, bias=bias)
             x = self.ln2(x + temp_x)

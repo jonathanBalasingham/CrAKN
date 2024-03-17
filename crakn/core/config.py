@@ -133,8 +133,8 @@ class TrainingConfig(BaseSettings):
         "dft_3d_2021",
         "dft_2d",
         "matbench"
-    ] = "dft_3d"
-    target: TARGET_ENUM = "formation_energy_peratom"
+    ] = "dft_3d_2021"
+    target: TARGET_ENUM = "mbj_bandgap"
     atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "mat2vec"
     neighbor_strategy: Literal[
         "k-nearest", "ddg"
@@ -154,7 +154,7 @@ class TrainingConfig(BaseSettings):
     test_ratio: Optional[float] = 0.1
     target_multiplication_factor: Optional[float] = None
     epochs: int = 1
-    batch_size: int = 32
+    batch_size: int = 64
     weight_decay: float = 0
     learning_rate: float = 1e-3
     filename: str = "sample"

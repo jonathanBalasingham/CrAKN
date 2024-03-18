@@ -15,9 +15,9 @@ class CrAKNConfig(BaseSettings):
     backbone: Literal["PST", "SimpleGCN"] = "PST"
     backbone_config: Union[PSTConfig, SimpleGCNConfig] = PSTConfig()
     embedding_dim: int = 64
-    layers: int = 2
+    layers: int = 4
     num_heads: int = 4
-    head_dim: int = 64
+    head_dim: int = 128
     dropout: float = 0
     output_features: int = 1
     amd_k: int = 100
@@ -61,7 +61,7 @@ class CrAKNAttention(nn.Module):
         self.embedding = nn.Linear(input_dim, num_heads * head_dim)
         self.bias_embedding = nn.Sequential(nn.Linear(input_dim, head_dim * num_heads),
                                             nn.Mish())
-        self.diff_embedding = nn.Sequential(nn.Linear(head_dim * num_heads, head_dim * num_heads),
+        self.diff_embedding = nn.Sequential(nn.Linear(input_dim, head_dim * num_heads),
                                             nn.Mish())
         self.qkv_proj = nn.Linear(input_dim, 3 * num_heads * head_dim)
         self.o_proj = nn.Linear(num_heads * head_dim, input_dim)
@@ -99,9 +99,8 @@ class CrAKNAttention(nn.Module):
         qkv = self.qkv_proj(x)
 
         if bias is not None:
-            bias = self.bias_embedding(bias)
-            diffs = self.diff_embedding(bias[None, :, :] - bias[:, None, :])
-            diffs = diffs.reshape(seq_length, seq_length, self.num_heads, self.head_dim)
+            bias = self.diff_embedding(bias)
+            diffs = bias.reshape(seq_length, seq_length, self.num_heads, self.head_dim)
             diffs = torch.norm(diffs, dim=-1)
             diffs = diffs.reshape(seq_length, seq_length, self.num_heads)
             diffs = diffs.permute(2, 0, 1)
@@ -160,12 +159,13 @@ class CrAKN(nn.Module):
         node_features = self.backbone(data)
         node_features = self.embedding(node_features)
         bias = self.bias_embedding(amds)
+        bias = bias[None, :, :] - bias[:, None, :]
 
         x = self.ln1(node_features)
 
         for layer in self.layers:
-            temp_x, temp_bias = layer(x, bias=bias)
+            temp_x, bias = layer(x, bias=bias)
             x = self.ln2(x + temp_x)
-            bias = self.ln2(bias + temp_bias)
+            #bias = self.ln2(bias + temp_bias)
 
         return self.out(x)

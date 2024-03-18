@@ -23,7 +23,7 @@ class PSTConfig(BaseSettings):
     atom_input_features: int = 200
     encoders: int = 4
     num_heads: int = 4
-    embedding_features: int = 64
+    embedding_features: int = 128
     output_features: int = 1
     dropout: float = 0
     attention_dropout: float = 0

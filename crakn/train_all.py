@@ -10,10 +10,10 @@ import argparse
 import glob
 import torch
 
-from crakn.data import get_train_val_loaders
-from crakn.train import train_dgl
-from crakn.config import TrainingConfig
+from .core.data import get_dataloader
 
+from .core.config import TrainingConfig
+from .core.train import train_crakn
 
 device = "cpu"
 if torch.cuda.is_available():
@@ -108,12 +108,11 @@ def train_for_folder(
         config.epochs = int(epochs)
     if restart_model_path is not None:
         print("Restarting model from:", restart_model_path)
-        from .backbones.gcn import SimpleGCN as ALIGNN  # TODO: Fix me
-        from .backbones.gcn import SimpleGCNConfig as ALIGNNConfig
+        from .core.model import CrAKN, CrAKNConfig
 
         rest_config = loadjson(os.path.join(restart_model_path, "config.json"))
         print("rest_config", rest_config)
-        model = ALIGNN(ALIGNNConfig(**rest_config["model"]))
+        model = CrAKN(CrAKNConfig(**rest_config["model"]))
         chk_glob = os.path.join(restart_model_path, "*.pt")
         tmp = "na"
         for i in glob.glob(chk_glob):
@@ -212,7 +211,7 @@ def train_for_folder(
         output_dir=config.output_dir,
     )
     t1 = time.time()
-    train_dgl(
+    train_crakn(
         config,
         model,
         train_val_test_loaders=[

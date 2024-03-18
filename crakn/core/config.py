@@ -156,7 +156,7 @@ class TrainingConfig(BaseSettings):
     epochs: int = 2000
     batch_size: int = 64
     weight_decay: float = 0
-    learning_rate: float = 1e-5
+    learning_rate: float = 1e-2
     filename: str = "sample"
     warmup_steps: int = 2000
     criterion: Literal["mse", "l1", "poisson", "zig"] = "l1"

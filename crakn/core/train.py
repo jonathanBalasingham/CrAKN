@@ -118,7 +118,8 @@ def setup_optimizer(params, config: TrainingConfig):
 
 def train_crakn(
         config: Union[TrainingConfig, Dict[str, Any]],
-        model: nn.Module = None):
+        model: nn.Module = None,
+        dataset: CrAKNDataset = None):
     """Training entry point for DGL networks.
 
     `config` should conform to alignn.conf.TrainingConfig, and
@@ -151,8 +152,10 @@ def train_crakn(
         deterministic = True
         ignite.utils.manual_seed(config.random_seed)
 
-    structures, targets, ids = retrieve_data(config)
-    dataset = CrAKNDataset(structures, targets, ids, config)
+    if dataset is None:
+        structures, targets, ids = retrieve_data(config)
+        dataset = CrAKNDataset(structures, targets, ids, config)
+
     train_loader, val_loader, test_loader = get_dataloader(dataset, config)
 
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
@@ -186,7 +189,6 @@ def train_crakn(
         )
     elif config.scheduler == "step":
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, )
-
 
     criteria = {
         "mse": nn.MSELoss(),
@@ -533,4 +535,4 @@ if __name__ == "__main__":
     config = TrainingConfig(
         random_seed=123, epochs=10, n_train=32, n_val=32, batch_size=16
     )
-    history = train_crakn(config, progress=True)
+    history = train_crakn(config)

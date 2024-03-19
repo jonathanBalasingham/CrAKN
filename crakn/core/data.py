@@ -5,17 +5,16 @@ import numpy as np
 from tqdm import tqdm
 
 from crakn.backbones.pst import PSTData
-from crakn.core.config import TrainingConfig
+from crakn.config import TrainingConfig
 
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler, SequentialSampler
-from typing import List, Tuple, Union
+from typing import List, Tuple
 from pymatgen.core.structure import Structure
 from jarvis.db.figshare import data
 from jarvis.core.atoms import Atoms
 # from matbench.bench import MatbenchBenchmark
 import torch
-import dgl
 
 
 def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float], List]:

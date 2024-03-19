@@ -13,8 +13,8 @@ from typing import List
 from pymatgen.core.structure import Structure
 from .core.data import get_dataloader, CrAKNDataset
 
-from .core.config import TrainingConfig
-from .core.train import train_crakn
+from crakn.config import TrainingConfig
+from crakn.train import train_crakn
 
 device = "cpu"
 if torch.cuda.is_available():
@@ -23,8 +23,6 @@ if torch.cuda.is_available():
 torch.manual_seed(1)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(1)
-
-device = "cpu"
 
 parser = argparse.ArgumentParser(
     description="Crystal Attribute Knowledge Network"

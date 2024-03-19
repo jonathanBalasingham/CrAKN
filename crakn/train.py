@@ -1,18 +1,11 @@
-"""Ignite training script.
+from functools import partial, reduce
 
-from the repository root, run
-`PYTHONPATH=$PYTHONPATH:. python alignn/train.py`
-then `tensorboard --logdir tb_logs/test` to monitor results...
-"""
-
-from functools import partial
-
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, Tuple
 import ignite
 import torch
-import random
-from ignite.contrib.handlers import TensorboardLogger
 from sklearn.metrics import mean_absolute_error
+from torch.utils.data import DataLoader
+from crakn.core.model import CrAKN
 
 try:
     from ignite.contrib.handlers.stores import EpochOutputStore
@@ -22,9 +15,6 @@ except Exception:
     pass
 
 from ignite.handlers import EarlyStopping
-from ignite.contrib.handlers.tensorboard_logger import (
-    global_step_from_engine,
-)
 from ignite.contrib.handlers.tqdm_logger import ProgressBar
 from ignite.engine import (
     Events,
@@ -43,24 +33,19 @@ import numpy as np
 from ignite.handlers import Checkpoint, DiskSaver, TerminateOnNan
 from ignite.metrics import Loss, MeanAbsoluteError
 from torch import nn
-from . import backbones
-from .data import get_train_val_loaders
-from .config import TrainingConfig
-from .backbones.gcn import SimpleGCN
+
+from crakn.core.data import get_dataloader, retrieve_data, CrAKNDataset, prepare_crakn_batch
+from crakn.config import TrainingConfig
 
 from jarvis.db.jsonutils import dumpjson
 import json
 import pprint
 
-# from accelerate import Accelerator
 import os
 import warnings
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
-# from sklearn.decomposition import PCA, KernelPCA
-# from sklearn.preprocessing import StandardScaler
 
-# torch config
 torch.set_default_dtype(torch.float32)
 
 
@@ -125,617 +110,82 @@ def setup_optimizer(params, config: TrainingConfig):
     return optimizer
 
 
-def train_dgl(
+def train_crakn(
         config: Union[TrainingConfig, Dict[str, Any]],
         model: nn.Module = None,
-        # checkpoint_dir: Path = Path("./"),
-        train_val_test_loaders=[],
-        # log_tensorboard: bool = False,
-):
+        dataloaders: Tuple[DataLoader, DataLoader, DataLoader] = None,
+        return_predictions: bool = False):
     """Training entry point for DGL networks.
 
     `config` should conform to alignn.conf.TrainingConfig, and
     if passed as a dict with matching keys, pydantic validation is used
     """
-    print(config)
-    if type(config) is dict:
-        try:
-            print(config)
-            config = TrainingConfig(**config)
-        except Exception as exp:
-            print("Check", exp)
     import os
+
+    if type(config) is dict:
+        config = TrainingConfig(**config)
 
     if not os.path.exists(config.output_dir):
         os.makedirs(config.output_dir)
+
     checkpoint_dir = os.path.join(config.output_dir)
     deterministic = False
     classification = False
-    print("config:")
+
     tmp = config.dict()
     f = open(os.path.join(config.output_dir, "config.json"), "w")
     f.write(json.dumps(tmp, indent=4))
     f.close()
+
     global tmp_output_dir
     tmp_output_dir = config.output_dir
-    pprint.pprint(tmp)  # , sort_dicts=False)
+    pprint.pprint(tmp)
+
     if config.classification_threshold is not None:
         classification = True
     if config.random_seed is not None:
         deterministic = True
         ignite.utils.manual_seed(config.random_seed)
 
-    line_graph = False
-    alignn_models = {
-        "alignn",
-        "dense_alignn",
-        "alignn_cgcnn",
-        "alignn_layernorm",
-    }
-    if config.backbone.name == "clgn":
-        line_graph = True
-    if config.backbone.name == "cgcnn":
-        line_graph = True
-    if config.backbone.name == "icgcnn":
-        line_graph = True
-    if config.backbone.name in alignn_models and config.backbone.alignn_layers > 0:
-        line_graph = True
-
-    if not train_val_test_loaders:
-
-        (
-            train_loader,
-            val_loader,
-            test_loader,
-            prepare_batch,
-        ) = get_train_val_loaders(
-            # ) = data.get_train_val_loaders(
-            dataset=config.dataset,
-            target=config.target,
-            n_train=config.n_train,
-            n_val=config.n_val,
-            n_test=config.n_test,
-            train_ratio=config.train_ratio,
-            val_ratio=config.val_ratio,
-            test_ratio=config.test_ratio,
-            batch_size=config.batch_size,
-            atom_features=config.atom_features,
-            neighbor_strategy=config.neighbor_strategy,
-            standardize=config.atom_features != "cgcnn",
-            line_graph=line_graph,
-            id_tag=config.id_tag,
-            pin_memory=config.pin_memory,
-            workers=config.num_workers,
-            save_dataloader=config.save_dataloader,
-            use_canonize=config.use_canonize,
-            filename=config.filename,
-            cutoff=config.cutoff,
-            max_neighbors=config.max_neighbors,
-            output_features=config.backbone.output_features,
-            classification_threshold=config.classification_threshold,
-            target_multiplication_factor=config.target_multiplication_factor,
-            standard_scalar_and_pca=config.standard_scalar_and_pca,
-            keep_data_order=config.keep_data_order,
-            output_dir=config.output_dir,
-        )
+    if dataloaders is None:
+        structures, targets, ids = retrieve_data(config)
+        dataset = CrAKNDataset(structures, targets, ids, config)
+        train_loader, val_loader, test_loader = get_dataloader(dataset, config)
     else:
-        train_loader = train_val_test_loaders[0]
-        val_loader = train_val_test_loaders[1]
-        test_loader = train_val_test_loaders[2]
-        prepare_batch = train_val_test_loaders[3]
+        train_loader, val_loader, test_loader = dataloaders
 
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
-    prepare_batch = partial(prepare_batch, device=device)
+    prepare_batch = partial(prepare_crakn_batch, device=device, internal_prepare_batch=train_loader.dataset.data.prepare_batch)
     if classification:
-        config.backbone.classification = True
-    # define network, optimizer, scheduler
-    _model = {
-        "simplegcn": SimpleGCN
-    }
+        config.base_config.classification = True
+
     if model is None:
-        net = _model.get(config.backbone.name)(config.backbone)
+        net = CrAKN(config.base_config)
     else:
         net = model
-    if config.data_parallel and torch.cuda.device_count() > 1:
-        print("Let's use", torch.cuda.device_count(), "GPUs!")
-        net = torch.nn.DataParallel(net)
+
     net.to(device)
     # group parameters to skip weight decay for bias and batchnorm
     params = group_decay(net)
     optimizer = setup_optimizer(params, config)
 
     if config.scheduler == "none":
-        # always return multiplier of 1 (i.e. do nothing)
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer, lambda epoch: 1.0
         )
-
     elif config.scheduler == "onecycle":
         steps_per_epoch = len(train_loader)
-        # pct_start = config.warmup_steps / (config.epochs * steps_per_epoch)
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=config.learning_rate,
             epochs=config.epochs,
             steps_per_epoch=steps_per_epoch,
-            # pct_start=pct_start,
             pct_start=0.3,
         )
     elif config.scheduler == "step":
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer,)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, )
 
-    if config.backbone.name == "alignn_atomwise":
-        if config.random_seed is not None:
-            random.seed(config.random_seed)
-            np.random.seed(config.random_seed)
-            torch.manual_seed(config.random_seed)
-            torch.cuda.manual_seed_all(config.random_seed)
-            torch.backends.cudnn.deterministic = True
-
-        def get_batch_errors(dat=[]):
-            """Get errors for samples."""
-            target_out = []
-            pred_out = []
-            grad = []
-            atomw = []
-            stress = []
-            mean_out = 0
-            mean_atom = 0
-            mean_grad = 0
-            mean_stress = 0
-            # natoms_batch=False
-            # print ('lendat',len(dat))
-            for i in dat:
-                if i["target_grad"]:
-                    # if config.normalize_graph_level_loss:
-                    #      natoms_batch = 0
-                    for m, n in zip(i["target_grad"], i["pred_grad"]):
-                        x = np.abs(np.array(m) - np.array(n))
-                        grad.append(np.mean(x))
-                        # if config.normalize_graph_level_loss:
-                        #     natoms_batch += np.array(i["pred_grad"]).shape[0]
-                if i["target_out"]:
-                    for j, k in zip(i["target_out"], i["pred_out"]):
-                        # if config.normalize_graph_level_loss and
-                        # natoms_batch:
-                        #   j=j/natoms_batch
-                        #   k=k/natoms_batch
-                        # if config.normalize_graph_level_loss and
-                        # not natoms_batch:
-                        # tmp = 'Add above in atomwise if not train grad.'
-                        #   raise ValueError(tmp)
-
-                        target_out.append(j)
-                        pred_out.append(k)
-                if i["target_stress"]:
-                    for p, q in zip(i["target_stress"], i["pred_stress"]):
-                        x = np.abs(np.array(p) - np.array(q))
-                        stress.append(np.mean(x))
-                if i["target_atomwise_pred"]:
-                    for m, n in zip(
-                            i["target_atomwise_pred"], i["pred_atomwise_pred"]
-                    ):
-                        x = np.abs(np.array(m) - np.array(n))
-                        atomw.append(np.mean(x))
-            if "target_out" in i:
-                # if i["target_out"]:
-                target_out = np.array(target_out)
-                pred_out = np.array(pred_out)
-                # print('target_out',target_out,target_out.shape)
-                # print('pred_out',pred_out,pred_out.shape)
-                mean_out = mean_absolute_error(target_out, pred_out)
-            if "target_stress" in i:
-                # if i["target_stress"]:
-                mean_stress = np.array(stress).mean()
-            if "target_grad" in i:
-                # if i["target_grad"]:
-                mean_grad = np.array(grad).mean()
-            if "target_atomwise_pred" in i:
-                # if i["target_atomwise_pred"]:
-                mean_atom = np.array(atomw).mean()
-            # print ('natoms_batch',natoms_batch)
-            # if natoms_batch!=0:
-            #   mean_out = mean_out/natoms_batch
-            # print ('dat',dat)
-            return mean_out, mean_atom, mean_grad, mean_stress
-
-        best_loss = np.inf
-        criterion = nn.L1Loss()
-        # criterion = nn.MSELoss()
-        params = group_decay(net)
-        optimizer = setup_optimizer(params, config)
-        # optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
-
-        history_train = []
-        history_val = []
-        for e in range(config.epochs):
-            # optimizer.zero_grad()
-            running_loss = 0
-            train_result = []
-            # for dats in train_loader:
-            for dats, jid in zip(train_loader, train_loader.dataset.ids):
-                info = {}
-                info["id"] = jid
-                optimizer.zero_grad()
-                result = net([dats[0].to(device), dats[1].to(device)])
-                # info = {}
-                info["target_out"] = []
-                info["pred_out"] = []
-                info["target_atomwise_pred"] = []
-                info["pred_atomwise_pred"] = []
-                info["target_grad"] = []
-                info["pred_grad"] = []
-                info["target_stress"] = []
-                info["pred_stress"] = []
-
-                loss1 = 0  # Such as energy
-                loss2 = 0  # Such as bader charges
-                loss3 = 0  # Such as forces
-                loss4 = 0  # Such as stresses
-                if config.backbone.output_features is not None:
-                    loss1 = config.backbone.graphwise_weight * criterion(
-                        result["out"], dats[2].to(device)
-                    )
-                    info["target_out"] = dats[2].cpu().numpy().tolist()
-                    info["pred_out"] = (
-                        result["out"].cpu().detach().numpy().tolist()
-                    )
-
-                if (
-                        config.backbone.atomwise_output_features > 0
-                        # config.model.atomwise_output_features is not None
-                        and config.backbone.atomwise_weight != 0
-                ):
-                    loss2 = config.backbone.atomwise_weight * criterion(
-                        result["atomwise_pred"].to(device),
-                        dats[0].ndata["atomwise_target"].to(device),
-                    )
-                    info["target_atomwise_pred"] = (
-                        dats[0].ndata["atomwise_target"].cpu().numpy().tolist()
-                    )
-                    info["pred_atomwise_pred"] = (
-                        result["atomwise_pred"].cpu().detach().numpy().tolist()
-                    )
-
-                if config.backbone.calculate_gradient:
-                    loss3 = config.backbone.gradwise_weight * criterion(
-                        result["grad"].to(device),
-                        dats[0].ndata["atomwise_grad"].to(device),
-                    )
-                    info["target_grad"] = (
-                        dats[0].ndata["atomwise_grad"].cpu().numpy().tolist()
-                    )
-                    info["pred_grad"] = (
-                        result["grad"].cpu().detach().numpy().tolist()
-                    )
-
-                if config.backbone.stresswise_weight != 0:
-                    loss4 = config.backbone.stresswise_weight * criterion(
-                        (result["stresses"]).to(device),
-                        torch.cat(tuple(dats[0].ndata["stresses"])).to(device),
-                    )
-                    info["target_stress"] = (
-                        torch.cat(tuple(dats[0].ndata["stresses"]))
-                        .cpu()
-                        .numpy()
-                        .tolist()
-                    )
-                    info["pred_stress"] = (
-                        result["stresses"].cpu().detach().numpy().tolist()
-                    )
-                    # print("target_stress", info["target_stress"][0])
-                    # print("pred_stress", info["pred_stress"][0])
-                train_result.append(info)
-                loss = loss1 + loss2 + loss3 + loss4
-
-                loss.backward()
-                optimizer.step()
-                # optimizer.zero_grad() #never
-                running_loss += loss.item()
-            mean_out, mean_atom, mean_grad, mean_stress = get_batch_errors(
-                train_result
-            )
-            # dumpjson(filename="Train_results.json", data=train_result)
-            scheduler.step()
-            print(
-                "TrainLoss",
-                "Epoch",
-                e,
-                "total",
-                running_loss,
-                "out",
-                mean_out,
-                "atom",
-                mean_atom,
-                "grad",
-                mean_grad,
-                "stress",
-                mean_stress,
-            )
-            history_train.append([mean_out, mean_atom, mean_grad, mean_stress])
-            dumpjson(
-                filename=os.path.join(config.output_dir, "history_train.json"),
-                data=history_train,
-            )
-            val_loss = 0
-            val_result = []
-            # for dats in val_loader:
-            for dats, jid in zip(val_loader, val_loader.dataset.ids):
-                info = {}
-                info["id"] = jid
-                optimizer.zero_grad()
-                result = net([dats[0].to(device), dats[1].to(device)])
-                # info = {}
-                info["target_out"] = []
-                info["pred_out"] = []
-                info["target_atomwise_pred"] = []
-                info["pred_atomwise_pred"] = []
-                info["target_grad"] = []
-                info["pred_grad"] = []
-                info["target_stress"] = []
-                info["pred_stress"] = []
-                loss1 = 0  # Such as energy
-                loss2 = 0  # Such as bader charges
-                loss3 = 0  # Such as forces
-                loss4 = 0  # Such as stresses
-                if config.backbone.output_features is not None:
-                    loss1 = config.backbone.graphwise_weight * criterion(
-                        result["out"], dats[2].to(device)
-                    )
-                    info["target_out"] = dats[2].cpu().numpy().tolist()
-                    info["pred_out"] = (
-                        result["out"].cpu().detach().numpy().tolist()
-                    )
-
-                if (
-                        config.backbone.atomwise_output_features > 0
-                        and config.backbone.atomwise_weight != 0
-                ):
-                    loss2 = config.backbone.atomwise_weight * criterion(
-                        result["atomwise_pred"].to(device),
-                        dats[0].ndata["atomwise_target"].to(device),
-                    )
-                    info["target_atomwise_pred"] = (
-                        dats[0].ndata["atomwise_target"].cpu().numpy().tolist()
-                    )
-                    info["pred_atomwise_pred"] = (
-                        result["atomwise_pred"].cpu().detach().numpy().tolist()
-                    )
-                if config.backbone.calculate_gradient:
-                    loss3 = config.backbone.gradwise_weight * criterion(
-                        result["grad"].to(device),
-                        dats[0].ndata["atomwise_grad"].to(device),
-                    )
-                    info["target_grad"] = (
-                        dats[0].ndata["atomwise_grad"].cpu().numpy().tolist()
-                    )
-                    info["pred_grad"] = (
-                        result["grad"].cpu().detach().numpy().tolist()
-                    )
-                if config.backbone.stresswise_weight != 0:
-                    # loss4 = config.model.stresswise_weight * criterion(
-                    #    result["stress"].to(device),
-                    #    dats[0].ndata["stresses"][0].to(device),
-                    # )
-                    loss4 = config.backbone.stresswise_weight * criterion(
-                        (result["stresses"]).to(device),
-                        torch.cat(tuple(dats[0].ndata["stresses"])).to(device),
-                    )
-                    info["target_stress"] = (
-                        torch.cat(tuple(dats[0].ndata["stresses"]))
-                        .cpu()
-                        .numpy()
-                        .tolist()
-                    )
-                    info["pred_stress"] = (
-                        result["stresses"].cpu().detach().numpy().tolist()
-                    )
-                loss = loss1 + loss2 + loss3 + loss4
-                val_result.append(info)
-                val_loss += loss.item()
-            mean_out, mean_atom, mean_grad, mean_stress = get_batch_errors(
-                val_result
-            )
-            current_model_name = "current_model.pt"
-            torch.save(
-                net.state_dict(),
-                os.path.join(config.output_dir, current_model_name),
-            )
-            if val_loss < best_loss:
-                best_loss = val_loss
-                best_model_name = "best_model.pt"
-                torch.save(
-                    net.state_dict(),
-                    os.path.join(config.output_dir, best_model_name),
-                )
-
-                print("Saving data for epoch:", e)
-                dumpjson(
-                    filename=os.path.join(
-                        config.output_dir, "Train_results.json"
-                    ),
-                    data=train_result,
-                )
-                dumpjson(
-                    filename=os.path.join(
-                        config.output_dir, "Val_results.json"
-                    ),
-                    data=val_result,
-                )
-
-            print(
-                "ValLoss",
-                "Epoch",
-                e,
-                "total",
-                val_loss,
-                "out",
-                mean_out,
-                "atom",
-                mean_atom,
-                "grad",
-                mean_grad,
-                "stress",
-                mean_stress,
-            )
-            history_val.append([mean_out, mean_atom, mean_grad, mean_stress])
-            dumpjson(
-                filename=os.path.join(config.output_dir, "history_val.json"),
-                data=history_val,
-            )
-
-        test_loss = 0
-        test_result = []
-        for dats, jid in zip(test_loader, test_loader.dataset.ids):
-            # for dats in test_loader:
-            info = {}
-            info["id"] = jid
-            optimizer.zero_grad()
-            # print('dats[0]',dats[0])
-            # print('test_loader',test_loader)
-            # print('test_loader.dataset.ids',test_loader.dataset.ids)
-            result = net([dats[0].to(device), dats[1].to(device)])
-            loss1 = 0  # Such as energy
-            loss2 = 0  # Such as bader charges
-            loss3 = 0  # Such as forces
-            loss4 = 0  # Such as stresses
-            if config.backbone.output_features is not None:
-                loss1 = config.backbone.graphwise_weight * criterion(
-                    result["out"], dats[2].to(device)
-                )
-                info["target_out"] = dats[2].cpu().numpy().tolist()
-                info["pred_out"] = (
-                    result["out"].cpu().detach().numpy().tolist()
-                )
-
-            if config.backbone.atomwise_output_features > 0:
-                loss2 = config.backbone.atomwise_weight * criterion(
-                    result["atomwise_pred"].to(device),
-                    dats[0].ndata["atomwise_target"].to(device),
-                )
-                info["target_atomwise_pred"] = (
-                    dats[0].ndata["atomwise_target"].cpu().numpy().tolist()
-                )
-                info["pred_atomwise_pred"] = (
-                    result["atomwise_pred"].cpu().detach().numpy().tolist()
-                )
-
-            if config.backbone.calculate_gradient:
-                loss3 = config.backbone.gradwise_weight * criterion(
-                    result["grad"].to(device),
-                    dats[0].ndata["atomwise_grad"].to(device),
-                )
-                info["target_grad"] = (
-                    dats[0].ndata["atomwise_grad"].cpu().numpy().tolist()
-                )
-                info["pred_grad"] = (
-                    result["grad"].cpu().detach().numpy().tolist()
-                )
-            if config.backbone.stresswise_weight != 0:
-                loss4 = config.backbone.stresswise_weight * criterion(
-                    # torch.flatten(result["stress"].to(device)),
-                    # (dats[0].ndata["stresses"]).to(device),
-                    # torch.flatten(dats[0].ndata["stresses"]).to(device),
-                    result["stresses"].to(device),
-                    torch.cat(tuple(dats[0].ndata["stresses"])).to(device),
-                    # torch.flatten(torch.cat(dats[0].ndata["stresses"])).to(device),
-                    # dats[0].ndata["stresses"][0].to(device),
-                )
-                # loss4 = config.model.stresswise_weight * criterion(
-                #    result["stress"][0].to(device),
-                #    dats[0].ndata["stresses"].to(device),
-                # )
-                info["target_stress"] = (
-                    torch.cat(tuple(dats[0].ndata["stresses"]))
-                    .cpu()
-                    .numpy()
-                    .tolist()
-                )
-                info["pred_stress"] = (
-                    result["stresses"].cpu().detach().numpy().tolist()
-                )
-            test_result.append(info)
-            loss = loss1 + loss2 + loss3 + loss4
-            test_loss += loss.item()
-
-        print("TestLoss", e, test_loss)
-        dumpjson(
-            filename=os.path.join(config.output_dir, "Test_results.json"),
-            data=test_result,
-        )
-        last_model_name = "last_model.pt"
-        torch.save(
-            net.state_dict(),
-            os.path.join(config.output_dir, last_model_name),
-        )
-        return test_result
-
-    if config.distributed:
-        import torch.distributed as dist
-        import os
-
-        print()
-        print()
-        print()
-        gpus = torch.cuda.device_count()
-        print("Using DistributedDataParallel !!!", gpus)
-
-        def setup(rank, world_size):
-            os.environ["MASTER_ADDR"] = "localhost"
-            os.environ["MASTER_PORT"] = "12355"
-
-            # initialize the process group
-            dist.init_process_group("gloo", rank=rank, world_size=world_size)
-
-        def cleanup():
-            dist.destroy_process_group()
-
-        setup(2, 2)
-        local_rank = [0, 1]
-        # net=torch.nn.parallel.DataParallel(net
-        # ,device_ids=[local_rank, ],output_device=local_rank)
-        net = torch.nn.parallel.DistributedDataParallel(
-            net,
-            device_ids=[
-                local_rank,
-            ],
-            output_device=local_rank,
-        )
-        print()
-        print()
-        print()
-        # )  # ,device_ids=[local_rank, ],output_device=local_rank)
-    """
-    # group parameters to skip weight decay for bias and batchnorm
-    params = group_decay(net)
-    optimizer = setup_optimizer(params, config)
-
-    if config.scheduler == "none":
-        # always return multiplier of 1 (i.e. do nothing)
-        scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, lambda epoch: 1.0
-        )
-
-    elif config.scheduler == "onecycle":
-        steps_per_epoch = len(train_loader)
-        # pct_start = config.warmup_steps / (config.epochs * steps_per_epoch)
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=config.learning_rate,
-            epochs=config.epochs,
-            steps_per_epoch=steps_per_epoch,
-            # pct_start=pct_start,
-            pct_start=0.3,
-        )
-    elif config.scheduler == "step":
-        # pct_start = config.warmup_steps / (config.epochs * steps_per_epoch)
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer,
-        )
-
-    """
-    # select configured loss function
     criteria = {
         "mse": nn.MSELoss(),
         "l1": nn.L1Loss(),
@@ -745,8 +195,7 @@ def train_dgl(
 
     # set up training engine and evaluators
     metrics = {"loss": Loss(criterion), "mae": MeanAbsoluteError()}
-    if config.backbone.output_features > 1 and config.standard_scalar_and_pca:
-        # metrics = {"loss": Loss(criterion), "mae": MeanAbsoluteError()}
+    if config.base_config.output_features > 1 and config.standard_scalar_and_pca:
         metrics = {
             "loss": Loss(
                 criterion, output_transform=make_standard_scalar_and_pca
@@ -792,7 +241,6 @@ def train_dgl(
         prepare_batch=prepare_batch,
         device=device,
         deterministic=deterministic,
-        # output_transform=make_standard_scalar_and_pca,
     )
 
     evaluator = create_supervised_evaluator(
@@ -800,7 +248,6 @@ def train_dgl(
         metrics=metrics,
         prepare_batch=prepare_batch,
         device=device,
-        # output_transform=make_standard_scalar_and_pca,
     )
 
     train_evaluator = create_supervised_evaluator(
@@ -808,7 +255,6 @@ def train_dgl(
         metrics=metrics,
         prepare_batch=prepare_batch,
         device=device,
-        # output_transform=make_standard_scalar_and_pca,
     )
 
     # ignite event handlers:
@@ -828,13 +274,11 @@ def train_dgl(
             "trainer": trainer,
         }
         if classification:
-
             def cp_score(engine):
                 """Higher accuracy is better."""
                 return engine.state.metrics["accuracy"]
 
         else:
-
             def cp_score(engine):
                 """Lower MAE is better."""
                 return -engine.state.metrics["mae"]
@@ -868,7 +312,6 @@ def train_dgl(
     if config.progress:
         pbar = ProgressBar()
         pbar.attach(trainer, output_transform=lambda x: {"loss": x})
-        # pbar.attach(evaluator,output_transform=lambda x: {"mae": x})
 
     history = {
         "train": {m: [] for m in metrics.keys()},
@@ -876,8 +319,6 @@ def train_dgl(
     }
 
     if config.store_outputs:
-        # log_results handler will save epoch output
-        # in history["EOS"]
         eos = EpochOutputStore()
         eos.attach(evaluator)
         train_eos = EpochOutputStore()
@@ -905,10 +346,6 @@ def train_dgl(
             history["train"][metric].append(tm)
             history["validation"][metric].append(vm)
 
-        # for metric in metrics.keys():
-        #    history["train"][metric].append(tmetrics[metric])
-        #    history["validation"][metric].append(vmetrics[metric])
-
         if config.store_outputs:
             history["EOS"] = eos.data
             history["trainEOS"] = train_eos.data
@@ -930,15 +367,12 @@ def train_dgl(
                 pbar.log_message(f"Val ROC AUC: {vmetrics['rocauc']:.4f}")
 
     if config.n_early_stopping is not None:
-        # early stopping if no improvement (improvement = higher score)
         if classification:
-
             def es_score(engine):
                 """Higher accuracy is better."""
                 return engine.state.metrics["accuracy"]
 
         else:
-
             def es_score(engine):
                 """Lower MAE is better."""
                 return -engine.state.metrics["mae"]
@@ -950,30 +384,9 @@ def train_dgl(
         )
         evaluator.add_event_handler(Events.EPOCH_COMPLETED, es_handler)
 
-    # optionally log results to tensorboard
-    if config.log_tensorboard:
-        tb_logger = TensorboardLogger(
-            log_dir=os.path.join(config.output_dir, "tb_logs", "test")
-        )
-        for tag, evaluator in [
-            ("training", train_evaluator),
-            ("validation", evaluator),
-        ]:
-            tb_logger.attach_output_handler(
-                evaluator,
-                event_name=Events.EPOCH_COMPLETED,
-                tag=tag,
-                metric_names=["loss", "mae"],
-                global_step_transform=global_step_from_engine(trainer),
-            )
-
     # train the model!
     trainer.run(train_loader, max_epochs=config.epochs)
 
-    if config.log_tensorboard:
-        test_loss = evaluator.state.metrics["loss"]
-        tb_logger.writer.add_hparams(config, {"hparam/test_loss": test_loss})
-        tb_logger.close()
     if config.write_predictions and classification:
         net.eval()
         f = open(
@@ -1007,11 +420,9 @@ def train_dgl(
             roc_auc_score(np.array(targets), np.array(predictions)),
         )
 
-    if (
-            config.write_predictions
+    if (config.write_predictions
             and not classification
-            and config.backbone.output_features > 1
-    ):
+            and config.base_config.output_features > 1):
         net.eval()
         mem = []
         with torch.no_grad():
@@ -1031,17 +442,12 @@ def train_dgl(
                 info["target"] = target
                 info["predictions"] = out_data
                 mem.append(info)
-        dumpjson(
-            filename=os.path.join(
-                config.output_dir, "multi_out_predictions.json"
-            ),
-            data=mem,
-        )
-    if (
-            config.write_predictions
+        dumpjson(filename=os.path.join(config.output_dir, "multi_out_predictions.json"),
+            data=mem)
+
+    if (config.write_predictions
             and not classification
-            and config.backbone.output_features == 1
-    ):
+            and config.base_config.output_features == 1):
         net.eval()
         f = open(
             os.path.join(config.output_dir, "prediction_results_test_set.csv"),
@@ -1051,10 +457,20 @@ def train_dgl(
         targets = []
         predictions = []
         with torch.no_grad():
-            ids = test_loader.dataset.ids  # [test_loader.dataset.indices]
-            for dat, id in zip(test_loader, ids):
-                g, lg, target = dat
-                out_data = net([g.to(device), lg.to(device)])
+            for dat in test_loader:
+                bb_data, amds, latt, ids, target = dat
+
+                out_data = net(
+                    ([
+                      bb_data[0][0].to(device),
+                      bb_data[0][1].to(device),
+                      bb_data[1].to(device),
+                    ],
+                    amds.to(device),
+                    latt.to(device),
+                    ids),
+                )
+
                 out_data = out_data.cpu().numpy().tolist()
                 if config.standard_scalar_and_pca:
                     sc = pk.load(
@@ -1066,21 +482,28 @@ def train_dgl(
                 target = target.cpu().numpy().flatten().tolist()
                 if len(target) == 1:
                     target = target[0]
-                f.write("%s, %6f, %6f\n" % (id, target, out_data))
-                targets.append(target)
-                predictions.append(out_data)
+
+                if isinstance(targets, list):
+                    targets += target
+                    if isinstance(out_data[0], list):
+                        out_data = [od[0] for od in out_data]
+
+                    predictions += out_data
+                    for id, t, p in zip(ids, target, out_data):
+                        f.write("%s, %6f, %6f\n" % (id, t, p))
+                else:
+                    f.write("%s, %6f, %6f\n" % (id, target, out_data))
+                    targets.append(target)
+                    predictions.append(out_data)
         f.close()
 
-        print(
-            "Test MAE:",
-            mean_absolute_error(np.array(targets), np.array(predictions)),
-        )
+        print("Test MAE:",
+              mean_absolute_error(np.array(targets), np.array(predictions)))
+
         with open("res.txt", "a") as f:
             f.write(f"Test MAE: {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")
 
         if config.store_outputs and not classification:
-            # save training targets and predictions here
-            # TODO: Add IDs
             resultsfile = os.path.join(
                 config.output_dir, "prediction_results_train_set.csv"
             )
@@ -1088,9 +511,11 @@ def train_dgl(
             target_vals, predictions = [], []
 
             for tgt, pred in history["trainEOS"]:
-                target_vals.append(tgt.cpu().numpy().tolist())
-                predictions.append(pred.cpu().numpy().tolist())
+                target_vals.append(tgt.cpu().numpy().flatten().tolist())
+                predictions.append(pred.cpu().numpy().flatten().tolist())
 
+            target_vals = reduce(lambda x, y: x + y, target_vals)
+            predictions = reduce(lambda x, y: x + y, predictions)
             target_vals = np.array(target_vals, dtype="float").flatten()
             predictions = np.array(predictions, dtype="float").flatten()
 
@@ -1099,33 +524,8 @@ def train_dgl(
                 for target_val, predicted_val in zip(target_vals, predictions):
                     print(f"{target_val}, {predicted_val}", file=f)
 
-    # TODO: Fix IDs for train loader
-    """
-    if config.write_train_predictions:
-        net.eval()
-        f = open("train_prediction_results.csv", "w")
-        f.write("id,target,prediction\n")
-        with torch.no_grad():
-            ids = train_loader.dataset.dataset.ids[
-                train_loader.dataset.indices
-            ]
-            print("lens", len(ids), len(train_loader.dataset.dataset))
-            x = []
-            y = []
-
-            for dat, id in zip(train_loader, ids):
-                g, lg, target = dat
-                out_data = net([g.to(device), lg.to(device)])
-                out_data = out_data.cpu().numpy().tolist()
-                target = target.cpu().numpy().flatten().tolist()
-                for i, j in zip(out_data, target):
-                    x.append(i)
-                    y.append(j)
-            for i, j, k in zip(ids, x, y):
-                f.write("%s, %6f, %6f\n" % (i, j, k))
-        f.close()
-
-    """
+    if return_predictions:
+        return history, predictions
     return history
 
 
@@ -1133,4 +533,4 @@ if __name__ == "__main__":
     config = TrainingConfig(
         random_seed=123, epochs=10, n_train=32, n_val=32, batch_size=16
     )
-    history = train_dgl(config, progress=True)
+    history = train_crakn(config)

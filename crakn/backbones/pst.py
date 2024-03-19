@@ -313,7 +313,7 @@ class PSTData(torch.utils.data.Dataset):
 
 if __name__ == '__main__':
     from crakn.core.data import retrieve_data
-    from crakn.core.config import TrainingConfig
+    from crakn.config import TrainingConfig
     config = TrainingConfig()
     structures, targets, ids = retrieve_data(config)
     pst_dataset = PSTData(structures, targets, config.backbone)

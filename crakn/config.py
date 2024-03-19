@@ -5,9 +5,11 @@ from typing import Optional, Union
 import os
 from pydantic import model_validator
 from typing import Literal
+
+from crakn.backbones.pst import PSTConfig
 from crakn.utils import BaseSettings
 from crakn.backbones.gcn import SimpleGCNConfig
-from crakn.crakn import CrAKNConfig
+from crakn.core.model import CrAKNConfig
 
 try:
     VERSION = (
@@ -18,7 +20,7 @@ except Exception:
     pass
 
 
-FEATURESET_SIZE = {"basic": 11, "atomic_number": 1, "cfid": 438, "cgcnn": 92}
+FEATURESET_SIZE = {"basic": 11, "atomic_number": 1, "cfid": 438, "cgcnn": 92, "mat2vec": 200}
 
 
 TARGET_ENUM = Literal[
@@ -128,12 +130,12 @@ class TrainingConfig(BaseSettings):
     # dataset configuration
     dataset: Literal[
         "dft_3d",
-        "jdft_3d-8-18-2021",
+        "dft_3d_2021",
         "dft_2d",
         "matbench"
-    ] = "dft_3d"
-    target: TARGET_ENUM = "formation_energy_peratom"
-    atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "cgcnn"
+    ] = "dft_2d"
+    target: TARGET_ENUM = "optb88vdw_bandgap"
+    atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "mat2vec"
     neighbor_strategy: Literal[
         "k-nearest", "ddg"
     ] = "k-nearest"
@@ -144,7 +146,6 @@ class TrainingConfig(BaseSettings):
     # training configuration
     random_seed: Optional[int] = 123
     classification_threshold: Optional[float] = None
-    # target_range: Optional[List] = None
     n_val: Optional[int] = None
     n_test: Optional[int] = None
     n_train: Optional[int] = None
@@ -152,13 +153,13 @@ class TrainingConfig(BaseSettings):
     val_ratio: Optional[float] = 0.1
     test_ratio: Optional[float] = 0.1
     target_multiplication_factor: Optional[float] = None
-    epochs: int = 300
+    epochs: int = 1
     batch_size: int = 64
     weight_decay: float = 0
-    learning_rate: float = 1e-2
+    learning_rate: float = 1e-4
     filename: str = "sample"
     warmup_steps: int = 2000
-    criterion: Literal["mse", "l1", "poisson", "zig"] = "mse"
+    criterion: Literal["mse", "l1", "poisson", "zig"] = "l1"
     optimizer: Literal["adamw", "sgd"] = "adamw"
     scheduler: Literal["onecycle", "none"] = "onecycle"
     pin_memory: bool = False
@@ -179,20 +180,16 @@ class TrainingConfig(BaseSettings):
     distributed: bool = False
     data_parallel: bool = False
     n_early_stopping: Optional[int] = None  # typically 50
-    output_dir: str = os.path.abspath(".")  # typically 50
+    output_dir: str = os.path.abspath("core")
 
     # model configuration
-    backbone: Union[
-        #CGCNNConfig,
-        SimpleGCNConfig,
-        #CrAKNConfig,  TODO: Add this
-    ] = CrAKNConfig(name="crakn")
+    base_config: CrAKNConfig = CrAKNConfig()
 
     @model_validator(mode="after")
     @classmethod
     def set_input_size(cls, values):
         """Automatically configure node feature dimensionality."""
-        values.backbone.atom_input_features = FEATURESET_SIZE[
+        values.base_config.backbone_config.atom_input_features = FEATURESET_SIZE[
             values.atom_features
         ]
 

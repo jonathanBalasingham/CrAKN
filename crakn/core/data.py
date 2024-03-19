@@ -1,3 +1,4 @@
+import random
 from functools import partial
 
 import amd
@@ -114,7 +115,7 @@ def prepare_crakn_batch(batch, device=None, internal_prepare_batch=None, non_blo
 
 def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
     total_size = len(dataset)
-
+    random.seed(config.random_seed)
     if config.n_train is None:
         if config.train_ratio is None:
             assert config.val_ratio + config.test_ratio < 1
@@ -125,6 +126,9 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
             assert config.train_ratio + config.val_ratio + config.test_ratio <= 1
             train_ratio = config.train_ratio
     indices = list(range(total_size))
+    if not config.keep_data_order:
+        random.shuffle(indices)
+
     if config.n_train:
         train_size = config.n_train
     else:

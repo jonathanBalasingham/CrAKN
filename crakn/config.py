@@ -133,13 +133,15 @@ class TrainingConfig(BaseSettings):
         "dft_3d_2021",
         "dft_2d",
         "matbench"
-    ] = "dft_2d"
-    target: TARGET_ENUM = "optb88vdw_bandgap"
+    ] = "dft_3d_2021"
+    target: TARGET_ENUM = "exfoliation_energy"
     atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "mat2vec"
     neighbor_strategy: Literal[
         "k-nearest", "ddg"
     ] = "k-nearest"
     id_tag: Literal["jid", "id", "_oqmd_entry_id"] = "jid"
+    prediction_method: Literal["single", "ensemble"] = "ensemble"
+    n_ensemble: int = 10
 
     # logging configuration
 
@@ -153,8 +155,8 @@ class TrainingConfig(BaseSettings):
     val_ratio: Optional[float] = 0.1
     test_ratio: Optional[float] = 0.1
     target_multiplication_factor: Optional[float] = None
-    epochs: int = 1
-    batch_size: int = 64
+    epochs: int = 250
+    batch_size: int = 32
     weight_decay: float = 0
     learning_rate: float = 1e-4
     filename: str = "sample"
@@ -175,7 +177,7 @@ class TrainingConfig(BaseSettings):
     cutoff: float = 8.0
     cutoff_extra: float = 3.0
     max_neighbors: int = 12
-    keep_data_order: bool = True
+    keep_data_order: bool = False
     normalize_graph_level_loss: bool = False
     distributed: bool = False
     data_parallel: bool = False

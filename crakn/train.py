@@ -156,7 +156,8 @@ def train_crakn(
 
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
-    prepare_batch = partial(prepare_crakn_batch, device=device, internal_prepare_batch=train_loader.dataset.data.prepare_batch)
+    prepare_batch = partial(prepare_crakn_batch, device=device,
+                            internal_prepare_batch=train_loader.dataset.data.prepare_batch)
     if classification:
         config.base_config.classification = True
 
@@ -443,7 +444,7 @@ def train_crakn(
                 info["predictions"] = out_data
                 mem.append(info)
         dumpjson(filename=os.path.join(config.output_dir, "multi_out_predictions.json"),
-            data=mem)
+                 data=mem)
 
     if (config.write_predictions
             and not classification
@@ -460,16 +461,44 @@ def train_crakn(
             for dat in test_loader:
                 bb_data, amds, latt, ids, target = dat
 
-                out_data = net(
-                    ([
-                      bb_data[0][0].to(device),
-                      bb_data[0][1].to(device),
-                      bb_data[1].to(device),
-                    ],
-                    amds.to(device),
-                    latt.to(device),
-                    ids),
-                )
+                if config.prediction_method == "ensemble":
+                    out_data = []
+                    int_collate = train_loader.dataset.data.collate_fn
+                    for _ in range(config.n_ensemble):
+
+                        supp_bb_data, supp_amds, supp_latt, supp_ids, _ = next(iter(train_loader))
+                        bb_data0 = [i for i in supp_bb_data[0][0]] + [i for i in bb_data[0][0]]
+                        bb_data1 = [i for i in supp_bb_data[0][1]] + [i for i in bb_data[0][1]]
+                        bb_data2 = [i for i in supp_bb_data[1]] + [i for i in bb_data[1]]
+                        bb_data = int_collate(zip(bb_data0, bb_data1, bb_data2, supp_ids + ids))
+
+                        temp_pred = net(
+                            ([
+                                 bb_data[0][0].to(device),
+                                 bb_data[0][1].to(device),
+                                 bb_data[1].to(device),
+                             ],
+                             torch.concat([supp_amds, amds], dim=0).to(device),
+                             torch.concat([supp_latt, latt], dim=0).to(device),
+                             supp_ids + ids),
+                        )
+                        out_data.append(temp_pred[-len(ids):])
+                    ensemble_predictions = torch.stack(out_data)
+                    print(ensemble_predictions.shape)
+                    out_data = torch.mean(ensemble_predictions, dim=0)
+
+                else:
+                    # 47.149
+                    out_data = net(
+                        ([
+                             bb_data[0][0].to(device),
+                             bb_data[0][1].to(device),
+                             bb_data[1].to(device),
+                         ],
+                         amds.to(device),
+                         latt.to(device),
+                         ids),
+                    )
 
                 out_data = out_data.cpu().numpy().tolist()
                 if config.standard_scalar_and_pca:

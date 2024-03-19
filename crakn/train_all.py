@@ -9,8 +9,9 @@ from jarvis.db.jsonutils import loadjson
 import argparse
 import glob
 import torch
-
-from .core.data import get_dataloader
+from typing import List
+from pymatgen.core.structure import Structure
+from .core.data import get_dataloader, CrAKNDataset
 
 from .core.config import TrainingConfig
 from .core.train import train_crakn
@@ -128,6 +129,9 @@ def train_for_folder(
 
     dataset = []
     n_outputs = []
+    structures: List[Structure] = []
+    targets: List[float] = []
+    ids = []
     multioutput = False
     lists_length_equal = True
     for i in data:
@@ -151,17 +155,23 @@ def train_for_folder(
                 "File format not implemented", file_format
             )
 
+        structures.append(atoms.pymatgen_converter())
+
         info["atoms"] = atoms.to_dict()
         info["jid"] = file_name
+        ids.append(file_name)
 
         tmp = [float(j) for j in i[1:]]  # float(i[1])
         if len(tmp) == 1:
             tmp = tmp[0]
         else:
             multioutput = True
+
+        targets.append(tmp)
         info["target"] = tmp  # float(i[1])
         n_outputs.append(info["target"])
         dataset.append(info)
+
     if multioutput:
         lists_length_equal = False not in [
             len(i) == len(n_outputs[0]) for i in n_outputs
@@ -177,49 +187,13 @@ def train_for_folder(
             raise ValueError("Make sure the outputs are of same size.")
         else:
             config.backbone.output_features = 1
-    (
-        train_loader,
-        val_loader,
-        test_loader,
-        prepare_batch,
-    ) = get_train_val_loaders(
-        dataset_array=dataset,
-        target=config.target,
-        n_train=config.n_train,
-        n_val=config.n_val,
-        n_test=config.n_test,
-        train_ratio=config.train_ratio,
-        val_ratio=config.val_ratio,
-        test_ratio=config.test_ratio,
-        batch_size=config.batch_size,
-        atom_features=config.atom_features,
-        neighbor_strategy=config.neighbor_strategy,
-        standardize=config.atom_features != "cgcnn",
-        id_tag=config.id_tag,
-        pin_memory=config.pin_memory,
-        workers=config.num_workers,
-        save_dataloader=config.save_dataloader,
-        use_canonize=config.use_canonize,
-        filename=config.filename,
-        cutoff=config.cutoff,
-        max_neighbors=config.max_neighbors,
-        output_features=config.backbone.output_features,
-        classification_threshold=config.classification_threshold,
-        target_multiplication_factor=config.target_multiplication_factor,
-        standard_scalar_and_pca=config.standard_scalar_and_pca,
-        keep_data_order=config.keep_data_order,
-        output_dir=config.output_dir,
-    )
+
+    crakn_dataset = CrAKNDataset(structures, targets, ids, config)
     t1 = time.time()
     train_crakn(
         config,
         model,
-        train_val_test_loaders=[
-            train_loader,
-            val_loader,
-            test_loader,
-            prepare_batch,
-        ],
+        dataloaders=get_dataloader(crakn_dataset, config),
     )
     t2 = time.time()
     print("Time taken (s):", t2 - t1)
@@ -233,8 +207,8 @@ if __name__ == "__main__":
         # keep_data_order=args.keep_data_order,
         classification_threshold=args.classification_threshold,
         output_dir=args.output_dir,
-        batch_size=(args.batch_size),
-        epochs=(args.epochs),
-        file_format=(args.file_format),
-        restart_model_path=(args.restart_model_path),
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        file_format=args.file_format,
+        restart_model_path=args.restart_model_path,
     )

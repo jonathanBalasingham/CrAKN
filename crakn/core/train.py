@@ -1,12 +1,12 @@
 from functools import partial, reduce
 
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, Tuple
 import ignite
 import torch
 import random
 from ignite.contrib.handlers import TensorboardLogger
 from sklearn.metrics import mean_absolute_error
-
+from torch.utils.data import DataLoader
 from crakn.core.model import CrAKN
 
 try:
@@ -119,7 +119,7 @@ def setup_optimizer(params, config: TrainingConfig):
 def train_crakn(
         config: Union[TrainingConfig, Dict[str, Any]],
         model: nn.Module = None,
-        dataset: CrAKNDataset = None):
+        dataloaders: Tuple[DataLoader, DataLoader, DataLoader] = None):
     """Training entry point for DGL networks.
 
     `config` should conform to alignn.conf.TrainingConfig, and
@@ -152,15 +152,16 @@ def train_crakn(
         deterministic = True
         ignite.utils.manual_seed(config.random_seed)
 
-    if dataset is None:
+    if dataloaders is None:
         structures, targets, ids = retrieve_data(config)
         dataset = CrAKNDataset(structures, targets, ids, config)
-
-    train_loader, val_loader, test_loader = get_dataloader(dataset, config)
+        train_loader, val_loader, test_loader = get_dataloader(dataset, config)
+    else:
+        train_loader, val_loader, test_loader = dataloaders
 
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
-    prepare_batch = partial(prepare_crakn_batch, device=device, internal_prepare_batch=dataset.data.prepare_batch)
+    prepare_batch = partial(prepare_crakn_batch, device=device, internal_prepare_batch=train_loader.dataset.data.prepare_batch)
     if classification:
         config.base_config.classification = True
 

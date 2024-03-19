@@ -36,8 +36,8 @@ def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float],
         if not isinstance(target, float):
             continue
 
-        if 'jid' in targets:
-            ids.append(target['jid'])
+        if config.id_tag in targets:
+            ids.append(datum[config.id_tag])
         else:
             ids.append(current_id)
             current_id += 1
@@ -156,8 +156,13 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
                             collate_fn=collate_fn, pin_memory=config.pin_memory,
                             shuffle=False)
 
-    test_loader = DataLoader(dataset, batch_size=config.batch_size,
+    """test_loader = DataLoader(dataset, batch_size=config.batch_size,
                              sampler=test_sampler,
+                             num_workers=config.num_workers,
+                             collate_fn=collate_fn, pin_memory=config.pin_memory)"""
+    test_set = torch.utils.data.Subset(dataset, indices[-test_size:])
+    test_loader = DataLoader(test_set, batch_size=config.batch_size,
+                             # sampler=test_sampler,
                              num_workers=config.num_workers,
                              collate_fn=collate_fn, pin_memory=config.pin_memory)
     return train_loader, val_loader, test_loader

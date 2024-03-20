@@ -164,7 +164,7 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
                              num_workers=config.num_workers,
                              collate_fn=collate_fn, pin_memory=config.pin_memory)"""
     test_set = torch.utils.data.Subset(dataset, indices[-test_size:])
-    test_loader = DataLoader(test_set, batch_size=config.batch_size,
+    test_loader = DataLoader(test_set, batch_size=config.test_batch_size,
                              # sampler=test_sampler,
                              num_workers=config.num_workers,
                              collate_fn=collate_fn, pin_memory=config.pin_memory)

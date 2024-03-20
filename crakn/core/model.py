@@ -22,6 +22,7 @@ class CrAKNConfig(BaseSettings):
     output_features: int = 1
     amd_k: int = 100
     classification: bool = False
+    backbone_only: bool = False
 
 
 def get_backbone(bb: str, bb_config) -> nn.Module:
@@ -151,12 +152,16 @@ class CrAKN(nn.Module):
         self.ln2 = nn.LayerNorm(config.embedding_dim)
         self.out = nn.Linear(config.embedding_dim, config.output_features)
         self.bn = nn.BatchNorm1d(config.embedding_dim)
+        self.backbone_only = config.backbone_only
 
     def forward(self, inputs, neighbors=None) -> torch.Tensor:
         backbone_input, amds, latt, _ = inputs
 
         data = backbone_input[:-1]
         node_features = self.backbone(data)
+        if self.backbone_only:
+            return self.out(node_features)
+
         node_features = self.embedding(node_features)
         bias = self.bias_embedding(amds)
         bias = bias[None, :, :] - bias[:, None, :]

@@ -5,6 +5,8 @@ import ignite
 import torch
 from sklearn.metrics import mean_absolute_error
 from torch.utils.data import DataLoader
+from tqdm import tqdm
+
 from crakn.core.model import CrAKN
 
 try:
@@ -458,7 +460,7 @@ def train_crakn(
         targets = []
         predictions = []
         with torch.no_grad():
-            for dat in test_loader:
+            for dat in tqdm(test_loader, desc="Predicting on test set.."):
                 bb_data, amds, latt, ids, target = dat
 
                 if config.prediction_method == "ensemble":
@@ -484,7 +486,6 @@ def train_crakn(
                         )
                         out_data.append(temp_pred[-len(ids):])
                     ensemble_predictions = torch.stack(out_data)
-                    print(ensemble_predictions.shape)
                     out_data = torch.mean(ensemble_predictions, dim=0)
 
                 else:
@@ -513,6 +514,7 @@ def train_crakn(
                     target = target[0]
 
                 if isinstance(targets, list):
+                    target = target if isinstance(target, list) else [target]
                     targets += target
                     if isinstance(out_data[0], list):
                         out_data = [od[0] for od in out_data]

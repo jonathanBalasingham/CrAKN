@@ -1,7 +1,7 @@
 {
     "version": "fff37bc52e9d2ee1ebb1809fba54a190ae68a6b6",
     "dataset": "dft_3d_2021",
-    "target": "formation_energy_peratom",
+    "target": "exfoliation_energy",
     "atom_features": "mat2vec",
     "neighbor_strategy": "k-nearest",
     "id_tag": "jid",
@@ -47,11 +47,12 @@
     "output_dir": "/home/jon/Desktop/CrAKN/temp",
     "base_config": {
         "name": "crakn",
-        "backbone": "simplegcn",
+        "backbone": "SimpleGCN",
         "backbone_config": {
+            "name": "SimpleGCN",
             "layers": 2,
             "atom_input_features": 92,
-            "embedding_features": 64,
+            "embedding_features": 128,
             "output_features": 64,
             "edge_lengthscale": 8,
             "weight_edges": true

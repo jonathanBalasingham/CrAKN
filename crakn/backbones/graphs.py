@@ -1,5 +1,5 @@
 """Module to generate networkx graphs."""
-import pymatgen
+from pymatgen.core.structure import Structure
 from jarvis.core.atoms import get_supercell_dims
 from jarvis.core.specie import Specie
 from jarvis.core.utils import random_colors
@@ -92,7 +92,7 @@ def get_neighbors(atoms=None,
                   max_neighbors=12,
                   cutoff=8):
     all_neighbors = atoms.get_all_neighbors(r=cutoff)  # each entry: [source_index, dest_index, distance, (), ()
-    if isinstance(atoms, pymatgen.core.structure.Structure):
+    if isinstance(atoms, Structure):
         all_neighbors = convert_to_jarvis_neighbors(all_neighbors)
     min_nbrs = min(len(neighborlist) for neighborlist in all_neighbors)
 
@@ -215,7 +215,7 @@ def dist_graphs(atoms=None,
     return g, lg
 
 
-def ddg(atoms: pymatgen.core.structure.Structure,
+def ddg(atoms: Structure,
         max_neighbors: int = 12,
         collapse_tol=1e-4,
         backward_edges=False):
@@ -237,6 +237,7 @@ def ddg(atoms: pymatgen.core.structure.Structure,
     group_map = {g: i for i, group in enumerate(groups) for g in group}
 
     idx_to_keep = set([group[0] for group in groups])
+    atom_types = [an[group[0]] for group in groups]
 
     m = len(all_neighbors)
     weights = np.full((m,), 1 / m, dtype=np.float64)
@@ -259,11 +260,6 @@ def ddg(atoms: pymatgen.core.structure.Structure,
         v = np.concatenate([v, u])
         u = u2
         dists = np.concatenate([dists, dists])
-
-    atom_types = []
-    for ii, s in enumerate(atoms.elements):
-        if ii in idx_to_keep:
-            atom_types.append(atoms.atomic_numbers[ii])
 
     g = dgl.graph((u, v))
     g.edata["distances"] = torch.tensor(dists).type(torch.get_default_dtype())

@@ -5,6 +5,7 @@ import amd
 import numpy as np
 from tqdm import tqdm
 
+from crakn.backbones.gcn import GCNData
 from crakn.backbones.pst import PSTData
 from crakn.config import TrainingConfig
 
@@ -51,6 +52,8 @@ def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float],
 def get_dataset(structures, targets, config):
     if config.name == "PST":
         return PSTData(structures, targets, config)
+    elif config.name == "SimpleGCN":
+        return GCNData(structures, targets, config)
     else:
         raise NotImplementedError(f"Not implemented yet, {config.name}")
 

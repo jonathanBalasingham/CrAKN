@@ -18,8 +18,7 @@ from pydantic_settings import SettingsConfigDict
 
 class PSTConfig(BaseSettings):
     """Hyperparameter schema for jarvisdgl.models.gcn."""
-    name: Literal["PST"] = "PST"
-    atom_features: str = "mat2vec"
+    name: Literal["PST"]
     atom_input_features: int = 200
     encoders: int = 4
     num_heads: int = 4
@@ -150,7 +149,7 @@ class PeriodicSetTransformerEncoder(nn.Module):
 
 class PeriodicSetTransformer(nn.Module):
 
-    def __init__(self, config: PSTConfig = PSTConfig()):
+    def __init__(self, config: PSTConfig = PSTConfig(name="PST")):
         super(PeriodicSetTransformer, self).__init__()
 
         if config.atom_encoding not in ["mat2vec", "cgcnn"]:

@@ -157,7 +157,7 @@ class TrainingConfig(BaseSettings):
     target_multiplication_factor: Optional[float] = None
     epochs: int = 250
     batch_size: int = 32
-    variable_batch_size: bool = True
+    variable_batch_size: bool = False
     test_batch_size: int = 1
     weight_decay: float = 1e-5
     learning_rate: float = 1e-4
@@ -184,10 +184,10 @@ class TrainingConfig(BaseSettings):
     distributed: bool = False
     data_parallel: bool = False
     n_early_stopping: Optional[int] = None  # typically 50
-    output_dir: str = os.path.abspath("core")
+    output_dir: str = os.path.abspath("temp")
 
     # model configuration
-    base_config: CrAKNConfig = CrAKNConfig()
+    base_config: CrAKNConfig = CrAKNConfig(name="crakn")
 
     @model_validator(mode="after")
     @classmethod

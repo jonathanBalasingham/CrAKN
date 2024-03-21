@@ -14,9 +14,9 @@ from random import randrange
 
 
 class CrAKNConfig(BaseSettings):
-    name: Literal["crakn"] = "crakn"
+    name: Literal["crakn"]
     backbone: Literal["PST", "SimpleGCN"] = "PST"
-    backbone_config: Union[PSTConfig, SimpleGCNConfig] = PSTConfig()
+    backbone_config: Union[PSTConfig, SimpleGCNConfig] = PSTConfig(name="PST")
     embedding_dim: int = 64
     layers: int = 4
     num_heads: int = 4
@@ -38,12 +38,6 @@ def get_backbone(bb: str, bb_config) -> nn.Module:
     else:
         raise NotImplementedError(f"Unknown backbone: {bb}")
 
-
-def get_data_retriever(bb: str):
-    if bb == "PST":
-        return lambda g: (g.ndata["pdd"], g.ndata["composition"])
-    else:
-        raise NotImplementedError(f"Unknown backbone: {bb}")
 
 
 def expand_mask(mask):
@@ -157,7 +151,6 @@ class CrAKN(nn.Module):
     def __init__(self, config: CrAKNConfig):
         super().__init__()
         self.backbone = get_backbone(config.backbone, bb_config=config.backbone_config)
-        self.retrieve_data = get_data_retriever(config.backbone)
         # self.layers = [CrAKNLayer(config.embedding_dim) for _ in range(config.layers)]
         self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim)
         self.layers = nn.ModuleList(

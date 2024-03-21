@@ -1,5 +1,5 @@
 """A baseline graph convolution network dgl implementation."""
-# import dgl
+import dgl
 import torch
 from dgl.nn import AvgPooling, GraphConv
 from typing import Literal
@@ -8,6 +8,9 @@ from torch.nn import functional as F
 
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
+from pymatgen.core.structure import Structure
+from .graphs import ddg
+from typing import Tuple, List
 
 
 class SimpleGCNConfig(BaseSettings):
@@ -66,3 +69,37 @@ class SimpleGCN(nn.Module):
         x = self.readout(g, x)
 
         return torch.squeeze(x)
+
+
+class GCNData(torch.utils.data.Dataset):
+
+    def __init__(self, structures, targets, config: SimpleGCNConfig):
+
+        self.atom_input_features = config.atom_input_features
+        self.edge_lengthscale = config.edge_lengthscale
+        self.id_prop_data = targets
+        self.graphs = [ddg(structure) for structure in structures]
+
+    def __len__(self):
+        return len(self.id_prop_data)
+
+    def __getitem__(self, idx):
+        cif_id, target = self.id_prop_data[idx], self.id_prop_data[idx]
+        return self.graphs[idx], torch.Tensor([float(target)])
+
+    @staticmethod
+    def collate_fn(samples: List[Tuple[dgl.DGLGraph, torch.Tensor]]):
+        """Dataloader helper to batch graphs cross `samples`."""
+        graphs, labels = map(list, zip(*samples))
+        batched_graph = dgl.batch(graphs)
+        return batched_graph, torch.tensor(labels)
+
+    @staticmethod
+    def prepare_batch(batch: Tuple[dgl.DGLGraph, torch.Tensor], device=None, non_blocking=False):
+        """Send batched dgl crystal graph to device."""
+        g, t = batch
+        batch = (
+            g.to(device, non_blocking=non_blocking),
+            t.to(device, non_blocking=non_blocking),
+        )
+        return batch

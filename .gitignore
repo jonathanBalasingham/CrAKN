@@ -13,3 +13,4 @@ best_model.pt
 checkpoint_*
 prediction_results_test_set.csv
 prediction_results_train_set.csv
+temp

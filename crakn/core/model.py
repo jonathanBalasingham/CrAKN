@@ -163,10 +163,16 @@ class CrAKN(nn.Module):
             self.out = nn.Linear(config.backbone_config.output_features, config.output_features)
         else:
             self.out = nn.Linear(config.embedding_dim, config.output_features)
+        self.backbone_out = nn.Linear(config.backbone_config.output_features, config.output_features)
         self.bn = nn.BatchNorm1d(config.amd_k)
         self.backbone_only = config.backbone_only
         self.attention_bias = config.attention_bias
         self.embed_bias = config.embed_bias
+
+        self.key_embedding = nn.Linear(config.embedding_dim, config.num_heads * config.head_dim)
+        self.query_embedding = nn.Linear(config.embedding_dim, config.num_heads * config.head_dim)
+        self.simple_attention = nn.MultiheadAttention(config.num_heads * config.head_dim, config.num_heads, vdim=1)
+        self.final_out = nn.Linear(config.num_heads * config.head_dim, config.output_features)
 
     def forward(self, inputs, neighbors=None) -> torch.Tensor:
         backbone_input, amds, latt, _ = inputs
@@ -176,7 +182,9 @@ class CrAKN(nn.Module):
         if self.backbone_only:
             return self.out(node_features)
 
+        initial_predictions = self.backbone_out(node_features)
         node_features = self.embedding(node_features)
+
         if self.attention_bias:
             #amds = self.bn(amds)
             if self.embed_bias:
@@ -187,10 +195,15 @@ class CrAKN(nn.Module):
         else:
             bias = None
 
-        x = self.ln1(node_features)
+
+        """x = self.ln1(node_features)
         for layer in self.layers:
             temp_x, bias = layer(x, bias=bias, embed_bias=self.embed_bias)
             x = self.ln2(x + temp_x)
             #bias = self.ln2(bias + temp_bias)
-
-        return self.out(x)
+        """
+        key = self.key_embedding(node_features)
+        query = self.query_embedding(node_features)
+        x, _ = self.simple_attention(query, key, initial_predictions, need_weights=False)
+        return self.final_out(x)
+        #return self.out(x)

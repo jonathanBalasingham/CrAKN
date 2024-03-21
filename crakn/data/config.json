@@ -19,7 +19,7 @@
     "epochs": 2000,
     "batch_size": 32,
     "test_batch_size": 32,
-    "variable_batch_size": true,
+    "variable_batch_size": false,
     "weight_decay": 0,
     "learning_rate": 0.0001,
     "filename": "sample",

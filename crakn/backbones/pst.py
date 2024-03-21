@@ -28,7 +28,7 @@ class PSTConfig(BaseSettings):
     dropout: float = 0
     attention_dropout: float = 0
     use_cuda: bool = torch.cuda.is_available()
-    decoder_layers: int = 1
+    decoder_layers: int = 2
     expansion_size: int = 10
     k: int = 15
     collapse_tol: float = 1e-4
@@ -176,6 +176,7 @@ class PeriodicSetTransformer(nn.Module):
         self.activations = nn.ModuleList([nn.Mish()
                                           for _ in range(config.decoder_layers - 1)])
         self.out = nn.Linear(config.embedding_features, config.output_features)
+        print(f"Output of PST will have dimension: {config.output_features}")
 
     def forward(self, features):
         str_fea, comp_fea = features

@@ -158,12 +158,12 @@ class TrainingConfig(BaseSettings):
     epochs: int = 250
     batch_size: int = 32
     test_batch_size: int = 1
-    weight_decay: float = 0
+    weight_decay: float = 1e-5
     learning_rate: float = 1e-4
     filename: str = "sample"
     warmup_steps: int = 2000
     criterion: Literal["mse", "l1", "poisson", "zig"] = "l1"
-    optimizer: Literal["adamw", "sgd"] = "adamw"
+    optimizer: Literal["adamw", "sgd", "adam"] = "adamw"
     scheduler: Literal["onecycle", "none"] = "onecycle"
     pin_memory: bool = False
     save_dataloader: bool = False

@@ -18,13 +18,13 @@
     "target_multiplication_factor": null,
     "epochs": 500,
     "batch_size": 64,
-    "test_batch_size": 32,
-    "weight_decay": 0.0,
+    "test_batch_size": 64,
+    "weight_decay": 0,
     "learning_rate": 0.0001,
     "filename": "sample",
     "warmup_steps": 2000,
     "criterion": "l1",
-    "optimizer": "adamw",
+    "optimizer": "adam",
     "scheduler": "onecycle",
     "pin_memory": false,
     "save_dataloader": false,
@@ -43,7 +43,7 @@
     "normalize_graph_level_loss": false,
     "distributed": false,
     "data_parallel": false,
-    "n_early_stopping": 50,
+    "n_early_stopping": null,
     "output_dir": "/home/jon/Desktop/CrAKN/temp",
     "base_config": {
         "name": "crakn",
@@ -55,9 +55,9 @@
             "encoders": 4,
             "num_heads": 4,
             "embedding_features": 128,
-            "output_features": 1,
+            "output_features": 128,
             "dropout": 0.0,
-            "attention_dropout": 0.0,
+            "attention_dropout": 0.1,
             "use_cuda": true,
             "decoder_layers": 1,
             "expansion_size": 10,
@@ -72,6 +72,9 @@
         "dropout": 0.0,
         "output_features": 1,
         "amd_k": 100,
-        "classification": false
+        "classification": false,
+        "backbone_only": true,
+        "attention_bias": true,
+        "embed_bias": false
     }
 }

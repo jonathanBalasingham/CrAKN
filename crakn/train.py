@@ -109,6 +109,12 @@ def setup_optimizer(params, config: TrainingConfig):
             momentum=0.9,
             weight_decay=config.weight_decay,
         )
+    elif config.optimizer == "adam":
+        optimizer = torch.optim.Adam(
+            params,
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay
+        )
     return optimizer
 
 
@@ -374,7 +380,6 @@ def train_crakn(
             def es_score(engine):
                 """Higher accuracy is better."""
                 return engine.state.metrics["accuracy"]
-
         else:
             def es_score(engine):
                 """Lower MAE is better."""
@@ -486,10 +491,11 @@ def train_crakn(
                         )
                         out_data.append(temp_pred[-len(ids):])
                     ensemble_predictions = torch.stack(out_data)
+                    #print(ensemble_predictions.shape)
+                    #print(f"SD of preds: {torch.mean(torch.std(ensemble_predictions, dim=0))}")
                     out_data = torch.mean(ensemble_predictions, dim=0)
 
                 else:
-                    # 47.149
                     out_data = net(
                         ([
                              bb_data[0][0].to(device),
@@ -530,6 +536,11 @@ def train_crakn(
 
         print("Test MAE:",
               mean_absolute_error(np.array(targets), np.array(predictions)))
+
+        def mad(target):
+            return torch.mean(torch.abs(target - torch.mean(target)))
+
+        print(f"Test MAD: {mad(torch.Tensor(targets))}")
 
         with open("res.txt", "a") as f:
             f.write(f"Test MAE: {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")

@@ -1,13 +1,16 @@
+import random
+
 import torch
 from torch import nn
 import torch.nn.functional as F
 import math
 from crakn.utils import BaseSettings
-from typing import Literal, Union
+from typing import Literal, Union, Tuple
 import dgl
 
 from ..backbones.gcn import SimpleGCNConfig, SimpleGCN
 from ..backbones.pst import PeriodicSetTransformer, PSTConfig
+from random import randrange
 
 
 class CrAKNConfig(BaseSettings):
@@ -167,7 +170,7 @@ class CrAKN(nn.Module):
             self.out = nn.Linear(config.backbone_config.output_features, config.output_features)
         else:
             self.out = nn.Linear(config.embedding_dim, config.output_features)
-        self.bn = nn.BatchNorm1d(config.embedding_dim)
+        self.bn = nn.BatchNorm1d(config.amd_k)
         self.backbone_only = config.backbone_only
         self.attention_bias = config.attention_bias
         self.embed_bias = config.embed_bias
@@ -182,6 +185,7 @@ class CrAKN(nn.Module):
 
         node_features = self.embedding(node_features)
         if self.attention_bias:
+            #amds = self.bn(amds)
             if self.embed_bias:
                 bias = self.bias_embedding(amds)
             else:
@@ -189,8 +193,8 @@ class CrAKN(nn.Module):
             bias = bias[None, :, :] - bias[:, None, :]
         else:
             bias = None
-        x = self.ln1(node_features)
 
+        x = self.ln1(node_features)
         for layer in self.layers:
             temp_x, bias = layer(x, bias=bias, embed_bias=self.embed_bias)
             x = self.ln2(x + temp_x)

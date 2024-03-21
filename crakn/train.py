@@ -165,7 +165,12 @@ def train_crakn(
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
     prepare_batch = partial(prepare_crakn_batch, device=device,
-                            internal_prepare_batch=train_loader.dataset.data.prepare_batch)
+                            internal_prepare_batch=train_loader.dataset.data.prepare_batch,
+                            variable=config.variable_batch_size)
+
+    prepare_batch_test = partial(prepare_crakn_batch, device=device,
+                            internal_prepare_batch=train_loader.dataset.data.prepare_batch,
+                            variable=False)
     if classification:
         config.base_config.classification = True
 
@@ -255,7 +260,7 @@ def train_crakn(
     evaluator = create_supervised_evaluator(
         net,
         metrics=metrics,
-        prepare_batch=prepare_batch,
+        prepare_batch=prepare_batch_test,
         device=device,
     )
 

@@ -102,13 +102,18 @@ def collate_crakn_data(dataset_list, internal_collate=PSTData.collate_fn):
             torch.stack(targets, dim=0))
 
 
-def prepare_crakn_batch(batch, device=None, internal_prepare_batch=None, non_blocking=False):
+def prepare_crakn_batch(batch, device=None, internal_prepare_batch=None, non_blocking=False, variable=True):
+    if variable:
+        subset = random.randrange(len(batch[-1]) // 4, len(batch[-1]))
+    else:
+        subset = len(batch[-1])
+
     batch = (
-        (internal_prepare_batch(batch[0], device=device, non_blocking=non_blocking),
-         batch[1].to(device=device, non_blocking=non_blocking),
-         batch[2].to(device=device, non_blocking=non_blocking),
-         batch[3]),
-        batch[4].to(device=device, non_blocking=non_blocking),
+        (internal_prepare_batch(batch[0], device=device, non_blocking=non_blocking, subset=subset),
+         batch[1][:subset].to(device=device, non_blocking=non_blocking),
+         batch[2][:subset].to(device=device, non_blocking=non_blocking),
+         batch[3][:subset]),
+        batch[4][:subset].to(device=device, non_blocking=non_blocking),
     )
     return batch
 

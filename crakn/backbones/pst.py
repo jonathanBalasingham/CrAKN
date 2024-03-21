@@ -300,14 +300,17 @@ class PSTData(torch.utils.data.Dataset):
 
     @staticmethod
     def prepare_batch(
-            batch: Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor, List], device=None, non_blocking=False
+            batch: Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor, List],
+            device=None, non_blocking=False, subset=None
     ):
         """Send batched dgl crystal graph to device."""
         (pdd, comp), t, _ = batch
+        if subset is None:
+            subset = len(t)
         batch = (
-            pdd.to(device, non_blocking=non_blocking),
-            comp.to(device, non_blocking=non_blocking),
-            t.to(device, non_blocking=non_blocking)
+            pdd[:subset].to(device, non_blocking=non_blocking),
+            comp[:subset].to(device, non_blocking=non_blocking),
+            t[:subset].to(device, non_blocking=non_blocking)
         )
         return batch
 

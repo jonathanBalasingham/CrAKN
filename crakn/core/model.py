@@ -196,11 +196,6 @@ class CrAKN(nn.Module):
         self.attention_bias = config.attention_bias
         self.embed_bias = config.embed_bias
 
-        self.key_embedding = nn.Linear(config.embedding_dim, config.num_heads * config.head_dim)
-        self.query_embedding = nn.Linear(config.embedding_dim, config.num_heads * config.head_dim)
-        self.simple_attention = nn.MultiheadAttention(config.num_heads * config.head_dim, config.num_heads, vdim=1)
-        self.final_out = nn.Linear(config.num_heads * config.head_dim, config.output_features)
-
     def predict(self, target_nodes, source_nodes):
         target_backbone_inputs, target_amds, target_latt = target_nodes
 
@@ -224,15 +219,14 @@ class CrAKN(nn.Module):
             bias = None
 
         x = self.ln1(node_features)
+        for layer in self.layers2:
+            x_temp, bias = layer(x, x, x, bias=bias, embed_bias=self.embed_bias, embed_value=True)
+            x = self.ln2(x + x_temp)
+
         for layer, layer2 in zip(self.layers, self.layers2):
             predictions, bias = layer(x, x, predictions, bias=bias, embed_bias=self.embed_bias, embed_value=False)
             #x, bias = layer2(x, x, x, bias=bias, embed_bias=self.embed_bias, embed_value=True)
 
-        # key = self.key_embedding(node_features)
-        # query = self.query_embedding(node_features)
-        # x, _ = self.simple_attention(query, key, initial_predictions, need_weights=False)
-        # return self.final_out(x)
-        # return self.out(x)
         return predictions
 
 

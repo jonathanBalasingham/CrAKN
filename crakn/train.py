@@ -479,9 +479,9 @@ def train_crakn(
                     for _ in range(config.n_ensemble):
 
                         supp_bb_data, supp_amds, supp_latt, supp_ids, _ = next(iter(train_loader))
-                        bb_data0 = [i for i in supp_bb_data[0][0]] + [i for i in bb_data[0][0]]
-                        bb_data1 = [i for i in supp_bb_data[0][1]] + [i for i in bb_data[0][1]]
-                        bb_data2 = [i for i in supp_bb_data[1]] + [i for i in bb_data[1]]
+                        bb_data0 = [i for i in supp_bb_data[0][0]] + [i for i in bb_data[0][0]]  # pdd
+                        bb_data1 = [i for i in supp_bb_data[0][1]] + [i for i in bb_data[0][1]]  # comp
+                        bb_data2 = [i for i in supp_bb_data[1]] + [i for i in bb_data[1]]        # target
                         bb_data = int_collate(zip(bb_data0, bb_data1, bb_data2, supp_ids + ids))
 
                         temp_pred = net(

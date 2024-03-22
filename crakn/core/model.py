@@ -64,12 +64,9 @@ class CrAKNAttention(nn.Module):
         self.diff_embedding = nn.Sequential(nn.Linear(input_dim, head_dim * num_heads),
                                             nn.Mish())
         # self.qkv_proj = nn.Linear(input_dim, 3 * num_heads * head_dim)
-        self.q_proj = nn.Sequential(nn.Linear(input_dim, head_dim * num_heads),
-                                            nn.Mish(), nn.Linear(head_dim * num_heads, head_dim * num_heads))
-        self.k_proj = nn.Sequential(nn.Linear(input_dim, head_dim * num_heads),
-                                            nn.Mish(), nn.Linear(head_dim * num_heads, head_dim * num_heads))
-        self.v_proj = nn.Sequential(nn.Linear(input_dim, head_dim * num_heads),
-                                            nn.Mish(), nn.Linear(head_dim * num_heads, head_dim * num_heads))
+        self.q_proj = nn.Linear(input_dim, head_dim * num_heads)
+        self.k_proj = nn.Linear(input_dim, head_dim * num_heads)
+        self.v_proj = nn.Linear(input_dim, head_dim * num_heads)
         self.o_proj = nn.Sequential(nn.Linear(head_dim * num_heads, head_dim * num_heads),
                                             nn.Mish(), nn.Linear(head_dim * num_heads, input_dim))
         self.bias_out = nn.Sequential(nn.Linear(head_dim * num_heads, input_dim),
@@ -84,17 +81,17 @@ class CrAKNAttention(nn.Module):
 
     def _reset_parameters(self):
         #  From original torch implementation
-        #nn.init.xavier_uniform_(self.q_proj.weight)
-        #nn.init.xavier_uniform_(self.k_proj.weight)
-        #nn.init.xavier_uniform_(self.v_proj.weight)
-        #self.q_proj.bias.data.fill_(0)
-        #self.k_proj.bias.data.fill_(0)
-        #self.v_proj.bias.data.fill_(0)
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        self.k_proj.bias.data.fill_(0)
+        self.v_proj.bias.data.fill_(0)
         #nn.init.xavier_uniform_(self.o_proj.weight)
         #self.o_proj.bias.data.fill_(0)
-        self.q_proj.apply(self._reset_linear_parameters)
-        self.k_proj.apply(self._reset_linear_parameters)
-        self.v_proj.apply(self._reset_linear_parameters)
+        #self.q_proj.apply(self._reset_linear_parameters)
+        #self.k_proj.apply(self._reset_linear_parameters)
+        #self.v_proj.apply(self._reset_linear_parameters)
         self.o_proj.apply(self._reset_linear_parameters)
 
 
@@ -194,7 +191,7 @@ class CrAKN(nn.Module):
         else:
             self.out = nn.Linear(config.embedding_dim, config.output_features)
         self.backbone_out = nn.Linear(config.backbone_config.output_features, config.output_features)
-        self.bn = nn.BatchNorm1d(config.amd_k)
+        self.bn = nn.BatchNorm1d(config.embedding_dim)
         self.backbone_only = config.backbone_only
         self.attention_bias = config.attention_bias
         self.embed_bias = config.embed_bias
@@ -219,9 +216,9 @@ class CrAKN(nn.Module):
         node_features = self.embedding(node_features)
 
         if self.attention_bias:
-            # amds = self.bn(amds)
             if self.embed_bias:
                 edge_features = self.bias_embedding(edge_features)
+                edge_features = self.bn(edge_features)
             bias = torch.cdist(edge_features, edge_features)
         else:
             bias = None

@@ -118,7 +118,7 @@ class CrAKNAttention(nn.Module):
         seq_length = k.shape[0]
 
         if mask is not None:
-            mask = expand_mask(mask)
+            mask = mask.unsqueeze(0)
 
         q = self.q_proj(q).reshape(q.shape[0], self.num_heads, -1)
         k = self.k_proj(k).reshape(k.shape[0], self.num_heads, -1)
@@ -130,17 +130,6 @@ class CrAKNAttention(nn.Module):
         vdim = v.shape[-1]
 
         if bias is not None:
-            # if embed_bias:
-            #    bias = self.diff_embedding(bias)
-            #    diffs = bias.reshape(q.shape[0], seq_length, self.num_heads, self.head_dim)
-            #    diffs = torch.norm(diffs, dim=-1)
-            # else:
-            #    diffs = torch.norm(bias, dim=-1, keepdim=True)
-            #    diffs = diffs.expand(-1, -1, self.num_heads)
-
-            # diffs = bias.unsqueeze(-1).expand(-1, -1, self.num_heads)
-            # diffs = diffs.reshape(q.shape[0], seq_length, self.num_heads)
-            # diffs = diffs.permute(2, 0, 1)
             diffs = bias.unsqueeze(0).expand(self.num_heads, -1, -1)
         else:
             diffs = None
@@ -205,28 +194,49 @@ class CrAKN(nn.Module):
         target_backbone_inputs, target_amds, target_latt = target_nodes
 
     def forward(self, inputs, neighbors=None) -> torch.Tensor:
-        backbone_input, edge_features, latt, _ = inputs
+        backbone_input, target_edge_features, latt, _ = inputs
 
         data = backbone_input[:-1]
-        node_features = self.backbone(data)
-        if self.backbone_only:
-            return self.out(node_features)
+        target_node_features = self.backbone(data)
 
-        predictions = self.backbone_out(node_features)
-        node_features = self.embedding(node_features)
+        if neighbors is None:
+            neighbor_node_features = target_node_features
+            neighbor_edge_features = target_edge_features
+            neighbor_latt = latt
+            neighbor_target = backbone_input[-1]
+            num_nodes = neighbor_node_features.shape[0]
+            mask = torch.concat([-torch.eye(num_nodes) + 1, torch.eye(num_nodes)], dim=1)
+        else:
+            neighbor_node_features, neighbor_edge_features, neighbor_latt, neighbor_target = neighbors
+            num_target_nodes = target_node_features.shape[0]
+            num_neighbor_nodes = neighbor_node_features.shape[0]
+            mask = torch.concat([torch.ones(num_target_nodes, num_neighbor_nodes), torch.eye(num_target_nodes)], dim=1)
+
+
+        if self.backbone_only:
+            return self.out(target_node_features)
+
+        num_neighbors = neighbor_node_features.shape[0]
+        predictions = self.backbone_out(target_node_features)
+
+        node_features = self.embedding(target_node_features)
+        neighbor_node_features = self.embedding(neighbor_node_features)
+
+        q = node_features
+        k = torch.concat([neighbor_node_features, node_features], dim=0)
+        edge_features = torch.concat([neighbor_edge_features, target_edge_features], dim=0)
 
         if self.attention_bias:
             if self.embed_bias:
+                target_edge_features = self.bias_embedding(target_edge_features)
                 edge_features = self.bias_embedding(edge_features)
-                #edge_features = self.bn(edge_features)
-            bias = torch.cdist(edge_features, edge_features)
+            bias = torch.cdist(target_edge_features, edge_features)
         else:
             bias = None
 
-        x = node_features
-
         for layer in self.layers:
-            predictions, bias = layer(x, x, predictions, bias=bias, embed_bias=self.embed_bias, embed_value=False)
+            predictions, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
+                                      bias=bias, embed_bias=self.embed_bias, embed_value=False, mask=mask)
 
         return predictions
 
@@ -235,11 +245,34 @@ if __name__ == '__main__':
     num_heads = 3
     input_dim = 2
     head_dim = 3
+    prediction_dim = 5
+
+    # During inference
     q = torch.zeros(2, input_dim)
     k = torch.zeros(6, input_dim)
-    v = torch.zeros(6, 5)
+    v = torch.zeros(6, prediction_dim)
+    initial_predictions = torch.zeros(2, prediction_dim)
     amds_target = torch.zeros(2, input_dim)
     amds_neighbors = torch.zeros(6, input_dim)
-    bias = torch.cdist(amds_target, amds_neighbors)
+    bias = torch.cdist(amds_target, torch.concat([amds_neighbors, amds_target], dim=0))
     att = CrAKNAttention(input_dim, num_heads, head_dim)
-    att(q, k, v, bias=bias)
+    master_k = torch.concat([k, q], dim=0)
+    master_v = torch.concat([v, initial_predictions], dim=0)
+    mask = torch.concat([torch.ones(q.shape[0], k.shape[0]), torch.eye(q.shape[0])], dim=1)
+    att(q, master_k, master_v, bias=bias, mask=mask)
+
+    # In training
+    q = torch.zeros(2, input_dim)
+    k = torch.zeros(q.shape[0], input_dim)
+    v = torch.zeros(q.shape[0], prediction_dim)
+    initial_predictions = torch.zeros(2, prediction_dim)
+    amds_target = torch.zeros(q.shape[0], input_dim)
+    amds_neighbors = torch.zeros(q.shape[0], input_dim)
+    amds = torch.concat([amds_target, amds_target], dim=0)
+    bias = torch.cdist(amds_target, amds)
+    att = CrAKNAttention(input_dim, num_heads, head_dim)
+    master_k = torch.concat([k, q], dim=0)
+    master_v = torch.concat([v, initial_predictions], dim=0)
+    mask = torch.concat([-torch.eye(q.shape[0], k.shape[0])+1, torch.eye(q.shape[0])], dim=1)
+    att(q, master_k, master_v, bias=bias)
+

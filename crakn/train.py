@@ -169,8 +169,8 @@ def train_crakn(
                             variable=config.variable_batch_size)
 
     prepare_batch_test = partial(prepare_crakn_batch, device=device,
-                            internal_prepare_batch=train_loader.dataset.data.prepare_batch,
-                            variable=False)
+                                 internal_prepare_batch=train_loader.dataset.data.prepare_batch,
+                                 variable=False)
     if classification:
         config.base_config.classification = True
 
@@ -469,37 +469,35 @@ def train_crakn(
         f.write("id,target,prediction\n")
         targets = []
         predictions = []
+
         with torch.no_grad():
+            neighbor_data = []
+            for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
+                bb_data, amds, latt, ids, target = dat
+                neighbor_node_features = net.backbone((bbd.to(device) for bbd in bb_data[0]))
+                neighbor_data.append((neighbor_node_features, amds, latt, target))
+
             for dat in tqdm(test_loader, desc="Predicting on test set.."):
                 bb_data, amds, latt, ids, target = dat
 
                 if config.prediction_method == "ensemble":
                     out_data = []
-                    int_collate = train_loader.dataset.data.collate_fn
-                    for _ in range(config.n_ensemble):
-
-                        supp_bb_data, supp_amds, supp_latt, supp_ids, _ = next(iter(train_loader))
-                        bb_data0 = [i for i in supp_bb_data[0][0]] + [i for i in bb_data[0][0]]  # pdd
-                        bb_data1 = [i for i in supp_bb_data[0][1]] + [i for i in bb_data[0][1]]  # comp
-                        bb_data2 = [i for i in supp_bb_data[1]] + [i for i in bb_data[1]]        # target
-                        bb_data = int_collate(zip(bb_data0, bb_data1, bb_data2, supp_ids + ids))
-
+                    for neighbor_datum in neighbor_data:
                         temp_pred = net(
                             ([
                                  bb_data[0][0].to(device),
                                  bb_data[0][1].to(device),
-                                 bb_data[1].to(device),
+                                 torch.zeros(bb_data[1].shape).to(device),
                              ],
-                             torch.concat([supp_amds, amds], dim=0).to(device),
-                             torch.concat([supp_latt, latt], dim=0).to(device),
-                             supp_ids + ids),
+                             amds.to(device),
+                             latt.to(device),
+                             ids),
+                            neighbors=(datum.to(device) for datum in neighbor_datum)
                         )
                         out_data.append(temp_pred[-len(ids):])
                     ensemble_predictions = torch.stack(out_data)
-                    #print(ensemble_predictions.shape)
-                    #print(f"SD of preds: {torch.mean(torch.std(ensemble_predictions, dim=0))}")
+                    # print(f"SD of preds: {torch.mean(torch.std(ensemble_predictions, dim=0))}")
                     out_data = torch.mean(ensemble_predictions, dim=0)
-
                 else:
                     out_data = net(
                         ([

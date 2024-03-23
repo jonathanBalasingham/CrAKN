@@ -474,21 +474,27 @@ def train_crakn(
             neighbor_data = []
             for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
                 bb_data, amds, latt, ids, target = dat
-                neighbor_node_features = net.backbone((bbd.to(device) for bbd in bb_data[0]))
+                train_inputs = bb_data[0]
+                if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
+                    train_inputs = [i.to(device) for i in train_inputs]
+                else:
+                    train_inputs = train_inputs.to(device)
+                neighbor_node_features = net.backbone(train_inputs)
                 neighbor_data.append((neighbor_node_features, amds, latt, target))
 
             for dat in tqdm(test_loader, desc="Predicting on test set.."):
                 bb_data, amds, latt, ids, target = dat
+                test_bb_data = bb_data[0]
+                if isinstance(test_bb_data, list) or isinstance(test_bb_data, tuple):
+                    test_bb_data = [i.to(device) for i in test_bb_data]
+                else:
+                    test_bb_data = [test_bb_data.to(device)]
 
                 if config.prediction_method == "ensemble":
                     out_data = []
                     for neighbor_datum in neighbor_data:
                         temp_pred = net(
-                            ([
-                                 bb_data[0][0].to(device),
-                                 bb_data[0][1].to(device),
-                                 torch.zeros(bb_data[1].shape).to(device),
-                             ],
+                            (test_bb_data + [torch.zeros(bb_data[1].shape).to(device)],
                              amds.to(device),
                              latt.to(device),
                              ids),
@@ -500,11 +506,7 @@ def train_crakn(
                     out_data = torch.mean(ensemble_predictions, dim=0)
                 else:
                     out_data = net(
-                        ([
-                             bb_data[0][0].to(device),
-                             bb_data[0][1].to(device),
-                             bb_data[1].to(device),
-                         ],
+                        (test_bb_data + [torch.zeros(bb_data[1].shape).to(device)],
                          amds.to(device),
                          latt.to(device),
                          ids),

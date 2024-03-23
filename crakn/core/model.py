@@ -205,13 +205,16 @@ class CrAKN(nn.Module):
             neighbor_latt = latt
             neighbor_target = backbone_input[-1]
             num_nodes = neighbor_node_features.shape[0]
-            mask = torch.concat([-torch.eye(num_nodes) + 1, torch.eye(num_nodes)], dim=1)
+            mask = torch.concat([-torch.eye(num_nodes, device=target_node_features.device) + 1,
+                                 torch.eye(num_nodes, device=target_node_features.device)], dim=1)
+            mask.to(target_node_features.device)
         else:
             neighbor_node_features, neighbor_edge_features, neighbor_latt, neighbor_target = neighbors
             num_target_nodes = target_node_features.shape[0]
             num_neighbor_nodes = neighbor_node_features.shape[0]
-            mask = torch.concat([torch.ones(num_target_nodes, num_neighbor_nodes), torch.eye(num_target_nodes)], dim=1)
-
+            mask = torch.concat([torch.ones(num_target_nodes, num_neighbor_nodes, device=target_node_features.device),
+                                 torch.eye(num_target_nodes, device=target_node_features.device)], dim=1)
+            mask.to(target_node_features.device)
 
         if self.backbone_only:
             return self.out(target_node_features)

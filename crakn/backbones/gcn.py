@@ -11,7 +11,7 @@ from pydantic_settings import SettingsConfigDict
 from pymatgen.core.structure import Structure
 from .graphs import ddg
 from typing import Tuple, List
-from .pst import AtomFeaturizer, DistanceExpansion
+from .utils import AtomFeaturizer
 
 
 class SimpleGCNConfig(BaseSettings):
@@ -65,7 +65,6 @@ class SimpleGCN(nn.Module):
         if isinstance(g, (tuple, list)):
             g = g[0]
         g = g.local_var()
-        print(g.num_nodes())
 
         if self.weight_edges:
             r = g.edata["distances"]
@@ -82,12 +81,10 @@ class SimpleGCN(nn.Module):
             x = F.relu(layer(g, node_features, edge_weight=edge_weights))
         x = self.layer2(g, x, edge_weight=edge_weights)
 
-        print(x.shape)
         if "weights" in g.ndata:
-            out = self.weighted_readout(g, g.ndata["weights"] * x)
+            out = self.weighted_readout(g, g.ndata["weights"].unsqueeze(1) * x)
         else:
             out = self.readout(g, x)
-        print(out.shape)
         return out
 
 
@@ -119,9 +116,10 @@ class GCNData(torch.utils.data.Dataset):
         """Send batched dgl crystal graph to device."""
 
         g, t = batch
+
         if subset is not None:
             return (
-                g.subgraph(g.nodes()[:subset]).to(device=device, non_blocking=non_blocking),
+                dgl.batch(dgl.unbatch(g)[:subset]).to(device=device, non_blocking=non_blocking),
                 t[:subset].to(device=device, non_blocking=non_blocking)
             )
 

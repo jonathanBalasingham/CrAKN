@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
+from .utils import DistanceExpansion, AtomFeaturizer
 
 
 class PSTConfig(BaseSettings):
@@ -200,43 +201,6 @@ class PeriodicSetTransformer(nn.Module):
             x = activation(x)
 
         return self.out(x)
-
-
-class AtomFeaturizer(nn.Module):
-    def __init__(self, id_prop_file="mat2vec.csv", use_cuda=True):
-        super(AtomFeaturizer, self).__init__()
-        path = Path(__file__).parent.parent / 'data' / id_prop_file
-
-        if id_prop_file == "mat2vec.csv":
-            af = pd.read_csv(path).to_numpy()[:, 1:].astype("float32")
-            af = np.vstack([np.zeros(200), af, np.ones(200)])
-        else:
-            with open(path) as f:
-                atom_fea = json.load(f)
-            af = np.vstack([i for i in atom_fea.values()])
-            af = np.vstack([np.zeros(92), af, np.ones(92)])  # last is the mask, first is for padding
-        if use_cuda:
-            self.atom_fea = torch.Tensor(af).cuda()
-        else:
-            self.atom_fea = torch.Tensor(af)
-
-    def forward(self, x):
-        return torch.squeeze(self.atom_fea[x.long()])
-
-
-class DistanceExpansion(nn.Module):
-    def __init__(self, size=5, use_cuda=True):
-        super(DistanceExpansion, self).__init__()
-        self.size = size
-        if use_cuda:
-            self.starter = torch.Tensor([i for i in range(size)]).cuda()
-        else:
-            self.starter = torch.Tensor([i for i in range(size)])
-        self.starter /= size
-
-    def forward(self, x):
-        out = (1 - (x.flatten().reshape((-1, 1)) - self.starter)) ** 2
-        return out.reshape((x.shape[0], x.shape[1], x.shape[2] * self.size))
 
 
 def preprocess_pdds(pdds_):

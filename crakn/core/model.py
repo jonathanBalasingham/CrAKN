@@ -183,6 +183,11 @@ class CrAKN(nn.Module):
         self.layers2 = nn.ModuleList(
             [CrAKNAttention(config.embedding_dim, config.num_heads, config.head_dim, config.dropout)
              for _ in range(config.layers)])
+        self.ffns = nn.ModuleList(
+            nn.Sequential(nn.Linear(config.embedding_dim, config.embedding_dim),
+                          nn.ReLU(),
+                          nn.Linear(config.embedding_dim, config.embedding_dim))
+        )
         self.bias_embedding = nn.Linear(config.amd_k, config.embedding_dim)
         self.ln1 = nn.LayerNorm(config.embedding_dim)
         self.ln2 = nn.LayerNorm(config.embedding_dim)
@@ -213,19 +218,15 @@ class CrAKN(nn.Module):
         if self.attention_bias:
             if self.embed_bias:
                 edge_features = self.bias_embedding(edge_features)
-                edge_features = self.bn(edge_features)
+                #edge_features = self.bn(edge_features)
             bias = torch.cdist(edge_features, edge_features)
         else:
             bias = None
 
-        x = self.ln1(node_features)
-        for layer in self.layers2:
-            x_temp, bias = layer(x, x, x, bias=bias, embed_bias=self.embed_bias, embed_value=True)
-            x = self.ln2(x + x_temp)
+        x = node_features
 
-        for layer, layer2 in zip(self.layers, self.layers2):
+        for layer in self.layers:
             predictions, bias = layer(x, x, predictions, bias=bias, embed_bias=self.embed_bias, embed_value=False)
-            #x, bias = layer2(x, x, x, bias=bias, embed_bias=self.embed_bias, embed_value=True)
 
         return predictions
 

@@ -548,7 +548,7 @@ def train_crakn(
         print(f"Test MAD: {mad(torch.Tensor(targets))}")
 
         with open("res.txt", "a") as f:
-            f.write(f"Test MAE: {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")
+            f.write(f"Test MAE ({config.target}) : {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")
 
         if config.store_outputs and not classification:
             resultsfile = os.path.join(

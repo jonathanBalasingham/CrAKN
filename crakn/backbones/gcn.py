@@ -54,9 +54,10 @@ class SimpleGCN(nn.Module):
             atom_encoding_dim, config.embedding_features
         )
 
-        self.layer1 = [GraphConv(config.embedding_features, config.embedding_features) for _ in range(config.layers)]
+        self.layers = nn.ModuleList([
+            GraphConv(config.embedding_features, config.embedding_features)
+            for _ in range(config.layers)])
 
-        self.layer2 = GraphConv(config.embedding_features, config.output_features)
         self.readout = AvgPooling()
         self.weighted_readout = SumPooling()
 
@@ -77,9 +78,8 @@ class SimpleGCN(nn.Module):
         node_features = self.atom_embedding(self.af(v))
 
         x = node_features
-        for layer in self.layer1:
+        for layer in self.layers:
             x = F.relu(layer(g, node_features, edge_weight=edge_weights))
-        x = self.layer2(g, x, edge_weight=edge_weights)
 
         if "weights" in g.ndata:
             out = self.weighted_readout(g, g.ndata["weights"].unsqueeze(1) * x)

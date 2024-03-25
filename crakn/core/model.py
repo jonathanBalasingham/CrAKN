@@ -135,7 +135,8 @@ class CrAKNAttention(nn.Module):
                 diffs = bias.reshape(self.num_heads, bias.shape[0], bias.shape[1], self.bias_dim)
                 diffs = torch.norm(diffs, dim=-1)
             else:
-                diffs = self.distance_embedding(bias.unsqueeze(-1)).reshape(self.num_heads, bias.shape[0], bias.shape[-1])
+                diffs = self.distance_embedding(bias.unsqueeze(-1)).reshape(self.num_heads, bias.shape[0],
+                                                                            bias.shape[-1])
         else:
             diffs = None
 
@@ -166,6 +167,99 @@ class CrAKNAttention(nn.Module):
             return self.o_proj(values), bias
 
 
+class CrAKNEncoder(nn.Module):
+
+    def __init__(self, qdim, kdim, vdim, num_heads, head_dim, dropout=0, bias_dim=40, embed_value=False):
+        super().__init__()
+        self.qdim = qdim
+        self.kdim = kdim
+        self.vdim = vdim
+        self.bias_dim = bias_dim
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(num_heads * head_dim)
+        self.q_proj = nn.Linear(qdim, head_dim * num_heads)
+        self.k_proj = nn.Linear(kdim, head_dim * num_heads)
+        self.v_proj = nn.Linear(vdim, head_dim * num_heads)
+        self.q_out = nn.Linear(head_dim * num_heads, qdim)
+        self.k_out = nn.Linear(head_dim * num_heads, kdim)
+        self.v_out = nn.Linear(head_dim * num_heads, vdim)
+        self.q_ln = nn.LayerNorm(qdim)
+        self.k_ln = nn.LayerNorm(kdim)
+        self.v_ln = nn.LayerNorm(vdim)
+        self.activation = nn.ReLU()
+        self.bias_proj = nn.Linear(bias_dim, num_heads * bias_dim)
+
+        self.o_proj = nn.Sequential(nn.Linear(head_dim * num_heads, head_dim * num_heads),
+                                    nn.Mish(), nn.Linear(head_dim * num_heads, vdim))
+        self.bias_out = nn.Sequential(nn.Linear(bias_dim * num_heads, bias_dim),
+                                      nn.Mish())
+        self._reset_parameters()
+
+    def _reset_linear_parameters(self, mod):
+        if isinstance(mod, nn.Linear):
+            nn.init.xavier_uniform_(mod.weight)
+            mod.bias.data.fill_(0)
+
+    def _reset_parameters(self):
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        self.q_proj.bias.data.fill_(0)
+        self.k_proj.bias.data.fill_(0)
+        self.v_proj.bias.data.fill_(0)
+        self.o_proj.apply(self._reset_linear_parameters)
+
+    def scaled_dot_product(self, q, k, v, mask=None, bias=None):
+        """
+        k and v must have the same seq length
+        """
+        d_k = q.size()[-1]
+        attn_logits = torch.matmul(q, k.transpose(-2, -1))
+        attn_logits = attn_logits / math.sqrt(d_k)
+
+        if bias is not None:
+            attn_logits += bias
+
+        if mask is not None:
+            attn_logits = attn_logits.masked_fill(mask == 0, -9e15)
+
+        attention = F.softmax(attn_logits, dim=-1)
+        values = torch.matmul(attention, v)
+        return values, attention
+
+    def forward(self, q, k, v, mask=None, bias=None):
+        q_shape = q.size()
+        k_shape = k.size()
+
+        if mask is not None:
+            mask = mask.unsqueeze(0)
+
+        proj_q = self.q_proj(q).reshape(q.shape[0], self.num_heads, -1).permute(1, 0, 2)
+        proj_k = self.k_proj(k).reshape(k.shape[0], self.num_heads, -1).permute(1, 0, 2)
+        #proj_v = self.v_proj(v).reshape(v.shape[0], self.num_heads, -1).permute(1, 0, 2)
+        proj_v = v.unsqueeze(0).expand(self.num_heads, -1, -1)
+
+        if bias is not None:
+            bias = self.bias_proj(bias)
+            diffs = torch.norm(
+                bias.reshape(bias.shape[0], bias.shape[1], self.num_heads, self.bias_dim),
+                dim=-1).permute(2, 0, 1)
+        else:
+            diffs = None
+
+        values, attention = self.scaled_dot_product(proj_q, proj_k, proj_v, mask=mask, bias=diffs)
+        values = values.permute(1, 0, 2)
+
+        q = self.q_ln(q + self.activation(self.q_out(proj_q.reshape(q_shape[0], -1))))
+        k = self.k_ln(k + self.activation(self.k_out(proj_k.reshape(k_shape[0], -1))))
+
+        values = values.permute(1, 2, 0).reshape(-1, self.num_heads * self.vdim)
+        values = self.dropout(values)
+        return q, k, torch.mean(values, dim=-1, keepdim=True), self.bias_out(bias)
+
+
 class CrAKN(nn.Module):
     def __init__(self, config: CrAKNConfig):
         super().__init__()
@@ -174,9 +268,9 @@ class CrAKN(nn.Module):
         self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim)
         self.expansion = RBFExpansion(0, config.cutoff, config.expansion_size)
         self.layers = nn.ModuleList(
-            [CrAKNAttention(config.embedding_dim, config.embedding_dim, 1,
-                            config.num_heads, config.head_dim, dropout=config.dropout,
-                            embed_value=False, bias_dim=config.expansion_size)
+            [CrAKNEncoder(config.embedding_dim, config.embedding_dim, 1,
+                          config.num_heads, config.head_dim, dropout=config.dropout,
+                          embed_value=False, bias_dim=config.expansion_size)
              for _ in range(config.layers)])
 
         self.ffns = nn.ModuleList(
@@ -239,25 +333,30 @@ class CrAKN(nn.Module):
             bias = None
 
         for layer in self.layers:
-            predictions, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
-                                      bias=bias, embed_bias=self.embed_bias, mask=mask)
+            #predictions, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
+            #                                bias=bias, embed_bias=self.embed_bias, mask=mask)
+            q, k, predictions, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
+                                            bias=bias, mask=mask)
 
         return predictions
 
 
 if __name__ == '__main__':
     num_heads = 3
-    input_dim = 2
+    qdim = 6
+    kdim = 6
+    vdim = 1
     head_dim = 3
     prediction_dim = 5
+    amd_k = 10
 
     # During inference
-    q = torch.zeros(2, input_dim)
-    k = torch.zeros(6, input_dim)
+    q = torch.zeros(2, qdim)
+    k = torch.zeros(6, kdim)
     v = torch.zeros(6, prediction_dim)
     initial_predictions = torch.zeros(2, prediction_dim)
-    amds_target = torch.zeros(2, input_dim)
-    amds_neighbors = torch.zeros(6, input_dim)
+    amds_target = torch.zeros(2, amd_k)
+    amds_neighbors = torch.zeros(6, amd_k)
     bias = torch.cdist(amds_target, torch.concat([amds_neighbors, amds_target], dim=0))
     att = CrAKNAttention(q.shape[1], k.shape[1], v.shape[1], num_heads, head_dim)
     master_k = torch.concat([k, q], dim=0)
@@ -266,15 +365,15 @@ if __name__ == '__main__':
     att(q, master_k, master_v, bias=bias, mask=mask)
 
     # In training
-    q = torch.zeros(2, input_dim)
-    k = torch.zeros(q.shape[0], input_dim)
-    v = torch.zeros(q.shape[0], prediction_dim)
+    q = torch.ones(2, qdim)
+    k = q
+    v = torch.ones(q.shape[0], prediction_dim)
     initial_predictions = torch.zeros(2, prediction_dim)
-    amds_target = torch.zeros(q.shape[0], input_dim)
-    amds_neighbors = torch.zeros(q.shape[0], input_dim)
-    amds = torch.concat([amds_target, amds_target], dim=0)
+    amds_target = torch.zeros(q.shape[0], amd_k)
+    amds_neighbors = torch.zeros(k.shape[0], amd_k)
+    amds = torch.concat([amds_neighbors, amds_target], dim=0)
     bias = torch.cdist(amds_target, amds)
-    att = CrAKNAttention(input_dim, num_heads, head_dim)
+    att = CrAKNAttention(q.shape[1], k.shape[1], v.shape[1], num_heads, head_dim)
     master_k = torch.concat([k, q], dim=0)
     master_v = torch.concat([v, initial_predictions], dim=0)
     mask = torch.concat([-torch.eye(q.shape[0], k.shape[0]) + 1, torch.eye(q.shape[0])], dim=1)

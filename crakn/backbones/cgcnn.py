@@ -1,4 +1,3 @@
-
 from typing import Tuple
 
 import dgl
@@ -11,12 +10,12 @@ from typing import Literal
 from torch import nn
 
 # import torch
-from .utils import RBFExpansion
+from .utils import RBFExpansion, AtomFeaturizer
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
 
-class ACGCNNConfig(BaseSettings):
+class CGCNNConfig(BaseSettings):
     """Hyperparameter schema for jarvisdgl.models.cgcnn."""
 
     name: Literal["CGCNN"]
@@ -24,28 +23,26 @@ class ACGCNNConfig(BaseSettings):
     conv_layers: int = 3
     atom_input_features: int = 92
     edge_features: int = 40
-    node_features: int = 92
     layers: int = 1
     embedding_features: int = 256
     output_features: int = embedding_features
-    alignn_layers: int = 3
     link: Literal["identity", "log", "logit"] = "identity"
     zero_inflated: bool = False
     classification: bool = False
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
-class ACGCNNConv(nn.Module):
+class CGCNNConv(nn.Module):
     """Xie and Grossman graph convolution function.
 
     10.1103/PhysRevLett.120.145301
     """
 
     def __init__(
-        self,
-        node_features: int = 64,
-        edge_features: int = 32,
-        return_messages: bool = False,
+            self,
+            node_features: int = 64,
+            edge_features: int = 32,
+            return_messages: bool = False,
     ):
         """Initialize torch modules for CGCNNConv layer."""
         super().__init__()
@@ -67,10 +64,10 @@ class ACGCNNConv(nn.Module):
         self.bn = nn.BatchNorm1d(node_features)
 
     def forward(
-        self,
-        g: dgl.DGLGraph,
-        node_feats: torch.Tensor,
-        edge_feats: torch.Tensor,
+            self,
+            g: dgl.DGLGraph,
+            node_feats: torch.Tensor,
+            edge_feats: torch.Tensor,
     ) -> torch.Tensor:
         """CGCNN convolution defined in Eq 5.
 
@@ -116,34 +113,41 @@ class ACGCNNConv(nn.Module):
         return out
 
 
-class ACGCNN(nn.Module):
+class CGCNN(nn.Module):
     """CGCNN dgl implementation."""
 
     def __init__(
-        self, config: ACGCNNConfig = ACGCNNConfig(name="CGCNN")
+            self, config: CGCNNConfig = CGCNNConfig(name="CGCNN")
     ):
         """Set up CGCNN modules."""
         super().__init__()
+        if config.atom_encoding not in ["mat2vec", "cgcnn"]:
+            raise ValueError(f"atom_encoding_dim must be in {['mat2vec', 'cgcnn']}")
+        else:
+            atom_encoding_dim = 200 if config.atom_encoding == "mat2vec" else 92
+            id_prop_file = "mat2vec.csv" if config.atom_encoding == "mat2vec" else "atom_init.json"
 
         self.rbf = RBFExpansion(vmin=0, vmax=8.0, bins=config.edge_features)
         self.abf = RBFExpansion(
             vmin=-np.pi / 2, vmax=np.pi / 2, bins=config.edge_features
         )
-        # self.abf = RBFExpansion(vmin=-1, vmax=1, bins=config.edge_features)
+
+        self.af = AtomFeaturizer(use_cuda=config.use_cuda, id_prop_file=id_prop_file)
+
         self.atom_embedding = nn.Linear(
-            config.atom_input_features, config.node_features
+            atom_encoding_dim, config.node_features
         )
         self.classification = config.classification
         self.conv_layers1 = nn.ModuleList(
             [
-                ACGCNNConv(config.node_features, config.edge_features)
+                CGCNNConv(config.node_features, config.edge_features)
                 for _ in range(config.conv_layers)
             ]
         )
 
         self.conv_layers2 = nn.ModuleList(
             [
-                ACGCNNConv(config.edge_features, config.edge_features)
+                CGCNNConv(config.edge_features, config.edge_features)
                 for _ in range(config.conv_layers)
             ]
         )
@@ -194,27 +198,21 @@ class ACGCNN(nn.Module):
 
     def forward(self, g) -> torch.Tensor:
         """CGCNN function mapping graph to outputs."""
-        g, lg = g
         g = g.local_var()
-        # lg = g.line_graph(shared=True)
-        # lg.apply_edges(compute_bond_cosines)
-        angle_features = self.abf(lg.edata.pop("h"))
-        # fixed edge features: RBF-expanded bondlengths
-        bondlength = torch.norm(g.edata.pop("r"), dim=1)
+
+        bondlength = g.edata["distances"]
         edge_features = self.rbf(bondlength)
 
         # initial node features: atom feature network...
-        v = g.ndata.pop("atom_features")
-        node_features = self.atom_embedding(v)
+        v = g.ndata.pop("atom_types")
+        node_features = self.atom_embedding(self.af(v))
 
         # CGCNN-Conv block: update node features
         for conv_layer1, conv_layer2 in zip(
-            self.conv_layers1, self.conv_layers2
+                self.conv_layers1, self.conv_layers2
         ):
             node_features = conv_layer1(g, node_features, edge_features)
-            edge_features = conv_layer2(lg, edge_features, angle_features)
 
         # crystal-level readout
         features = self.readout(g, node_features)
         return features
-

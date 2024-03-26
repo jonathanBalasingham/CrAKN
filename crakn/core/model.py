@@ -188,7 +188,7 @@ class CrAKNEncoder(nn.Module):
         self.q_ln = nn.LayerNorm(qdim)
         self.k_ln = nn.LayerNorm(kdim)
         self.v_ln = nn.LayerNorm(vdim)
-        self.activation = nn.ReLU()
+        self.activation = nn.Mish()
         self.bias_proj = nn.Linear(bias_dim, num_heads * bias_dim)
 
         self.o_proj = nn.Sequential(nn.Linear(head_dim * num_heads, head_dim * num_heads),
@@ -232,13 +232,13 @@ class CrAKNEncoder(nn.Module):
     def forward(self, q, k, v, mask=None, bias=None):
         q_shape = q.size()
         k_shape = k.size()
+        v_shape = v.size()
 
         if mask is not None:
             mask = mask.unsqueeze(0)
 
-        proj_q = self.q_proj(q).reshape(q.shape[0], self.num_heads, -1).permute(1, 0, 2)
-        proj_k = self.k_proj(k).reshape(k.shape[0], self.num_heads, -1).permute(1, 0, 2)
-        #proj_v = self.v_proj(v).reshape(v.shape[0], self.num_heads, -1).permute(1, 0, 2)
+        proj_q = self.q_proj(q).reshape(q.shape[0], self.num_heads, self.head_dim).permute(1, 0, 2)
+        proj_k = self.k_proj(k).reshape(k.shape[0], self.num_heads, self.head_dim).permute(1, 0, 2)
         proj_v = v.unsqueeze(0).expand(self.num_heads, -1, -1)
 
         if bias is not None:
@@ -250,13 +250,13 @@ class CrAKNEncoder(nn.Module):
             diffs = None
 
         values, attention = self.scaled_dot_product(proj_q, proj_k, proj_v, mask=mask, bias=diffs)
-        values = values.permute(1, 0, 2)
+        values = values.permute(1, 0, 2).reshape(q_shape[0], self.vdim * self.num_heads)
+        proj_q = proj_q.permute(1, 2, 0).reshape(q_shape[0], self.num_heads * self.head_dim)
+        proj_k = proj_k.permute(1, 2, 0).reshape(k_shape[0], self.num_heads * self.head_dim)
 
-        q = self.q_ln(q + self.activation(self.q_out(proj_q.reshape(q_shape[0], -1))))
-        k = self.k_ln(k + self.activation(self.k_out(proj_k.reshape(k_shape[0], -1))))
+        q = self.q_ln(q + self.activation(self.q_out(proj_q)))
+        k = self.k_ln(k + self.activation(self.k_out(proj_k)))
 
-        values = values.permute(1, 2, 0).reshape(-1, self.num_heads * self.vdim)
-        values = self.dropout(values)
         return q, k, torch.mean(values, dim=-1, keepdim=True), self.bias_out(bias)
 
 

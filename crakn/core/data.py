@@ -37,7 +37,7 @@ def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float],
         if not isinstance(target, float):
             continue
 
-        if config.id_tag in targets:
+        if config.id_tag in datum:
             ids.append(datum[config.id_tag])
         else:
             ids.append(current_id)

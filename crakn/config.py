@@ -1,7 +1,7 @@
 """Pydantic model for default configuration and validation."""
 
 import subprocess
-from typing import Optional, Union
+from typing import Optional, Union, List
 import os
 from pydantic import model_validator
 from typing import Literal
@@ -165,7 +165,7 @@ class TrainingConfig(BaseSettings):
     warmup_steps: int = 2000
     criterion: Literal["mse", "l1", "poisson", "zig"] = "l1"
     optimizer: Literal["adamw", "sgd", "adam"] = "adamw"
-    scheduler: Literal["onecycle", "none"] = "onecycle"
+    scheduler: Literal["onecycle", "step", "none"] = "onecycle"
     pin_memory: bool = False
     save_dataloader: bool = False
     write_checkpoint: bool = True
@@ -185,6 +185,7 @@ class TrainingConfig(BaseSettings):
     data_parallel: bool = False
     n_early_stopping: Optional[int] = None  # typically 50
     output_dir: str = os.path.abspath("temp")
+    lr_milestones: List[int] = [150, 200]
 
     # model configuration
     base_config: CrAKNConfig = CrAKNConfig(name="crakn")

@@ -1,7 +1,9 @@
 from multiprocessing.context import ForkContext
+from pathlib import Path
 from re import X
 import numpy as np
 import pandas as pd
+import torch_geometric
 from jarvis.core.specie import chem_data, get_node_attributes
 
 # from jarvis.core.atoms import Atoms
@@ -28,6 +30,8 @@ from torch_scatter import scatter
 
 from crakn.backbones.utils import RBFExpansion, angle_emb_mp
 from crakn.utils import BaseSettings
+import pandas as pd
+import dgl
 
 try:
     import torch
@@ -40,7 +44,7 @@ except Exception as exp:
 class MatformerConfig(BaseSettings):
     """Hyperparameter schema for jarvisdgl.models.cgcnn."""
 
-    name: Literal["matformer"]
+    name: Literal["Matformer"]
     conv_layers: int = 5
     edge_layers: int = 0
     atom_input_features: int = 92
@@ -59,13 +63,16 @@ class MatformerConfig(BaseSettings):
     use_angle: bool = False
     angle_lattice: bool = False
     classification: bool = False
-    atom_features = "atomic_number"
-    transform = None
-    line_graph = False
-    neighbor_strategy = ""
-    lineControl = True
-    mean_train = None
-    std_train = None
+    atom_features: str = "cgcnn"
+    transform: str = ""
+    line_graph: bool = True
+    neighbor_strategy: str = "k-nearest"
+    lineControl: bool = True
+    max_neighbors: int = 12
+    cutoff: float = 8
+    use_canonize: bool = False
+    use_lattice: bool = False
+    compute_line_graph: bool = False
 
     class Config:
         """Configure model settings behavior."""
@@ -76,11 +83,12 @@ class MatformerConfig(BaseSettings):
 class Matformer(nn.Module):
     """att pyg implementation."""
 
-    def __init__(self, config: MatformerConfig = MatformerConfig(name="matformer")):
+    def __init__(self, config: MatformerConfig = MatformerConfig(name="Matformer")):
         """Set up att modules."""
         super().__init__()
         self.classification = config.classification
         self.use_angle = config.use_angle
+        print(config)
         self.atom_embedding = nn.Linear(
             config.atom_input_features, config.node_features
         )
@@ -131,19 +139,6 @@ class Matformer(nn.Module):
                 nn.Linear(config.node_features, config.node_features)
             )
 
-        self.edge_init = nn.Sequential(  ## module not used
-            nn.Linear(3 * config.node_features, config.node_features),
-            nn.Softplus(),
-            nn.Linear(config.node_features, config.node_features)
-        )
-
-        self.sbf = angle_emb_mp(num_spherical=3, num_radial=40, cutoff=8.0)  ## module not used
-
-        self.angle_init_layers = nn.Sequential(  ## module not used
-            nn.Linear(120, config.node_features),
-            nn.Softplus(),
-            nn.Linear(config.node_features, config.node_features)
-        )
 
         self.att_layers = nn.ModuleList(
             [
@@ -196,21 +191,6 @@ class Matformer(nn.Module):
         edge_feat = torch.norm(data.edge_attr, dim=1)
 
         edge_features = self.rbf(edge_feat)
-        if self.angle_lattice:  ## module not used
-            lattice_len = torch.norm(lattice, dim=-1)  # batch * 3 * 1
-            lattice_edge = self.lattice_rbf(lattice_len.view(-1)).view(-1, 3 * 128)  # batch * 3 * 128
-            cos1 = self.lattice_angle(torch.clamp(torch.sum(lattice[:, 0, :] * lattice[:, 1, :], dim=-1) / (
-                    torch.norm(lattice[:, 0, :], dim=-1) * torch.norm(lattice[:, 1, :], dim=-1)), -1, 1).unsqueeze(
-                -1)).view(-1, 128)
-            cos2 = self.lattice_angle(torch.clamp(torch.sum(lattice[:, 0, :] * lattice[:, 2, :], dim=-1) / (
-                    torch.norm(lattice[:, 0, :], dim=-1) * torch.norm(lattice[:, 2, :], dim=-1)), -1, 1).unsqueeze(
-                -1)).view(-1, 128)
-            cos3 = self.lattice_angle(torch.clamp(torch.sum(lattice[:, 1, :] * lattice[:, 2, :], dim=-1) / (
-                    torch.norm(lattice[:, 1, :], dim=-1) * torch.norm(lattice[:, 2, :], dim=-1)), -1, 1).unsqueeze(
-                -1)).view(-1, 128)
-            lattice_emb = self.lattice_emb(torch.cat((lattice_edge, cos1, cos2, cos3), dim=-1))
-            node_features = self.lattice_atom_emb(torch.cat((node_features, lattice_emb[data.batch]), dim=-1))
-
         node_features = self.att_layers[0](node_features, data.edge_index, edge_features)
         node_features = self.att_layers[1](node_features, data.edge_index, edge_features)
         node_features = self.att_layers[2](node_features, data.edge_index, edge_features)
@@ -219,10 +199,6 @@ class Matformer(nn.Module):
 
         # crystal-level readout
         features = scatter(node_features, data.batch, dim=0, reduce="mean")
-
-        if self.angle_lattice:
-            # features *= F.sigmoid(lattice_emb)
-            features += lattice_emb
 
         # features = F.softplus(features)
         features = self.fc(features)
@@ -233,7 +209,7 @@ class Matformer(nn.Module):
         if self.classification:
             out = self.softmax(out)
 
-        return torch.squeeze(out)
+        return features
 
 
 class MatformerConv(MessagePassing):
@@ -386,9 +362,6 @@ class MatformerData(torch.utils.data.Dataset):
 
     def __init__(
             self,
-            #df: pd.DataFrame,
-            #graphs: Sequence[Data],
-            #target: str,
             structures,
             targets,
             config: MatformerConfig = MatformerConfig(name="Matformer")
@@ -399,23 +372,23 @@ class MatformerData(torch.utils.data.Dataset):
         `graphs`: DGLGraph representations corresponding to rows in `df`
         `target`: key for label column in `df`
         """
-        #self.df = df
-        self.graphs = structures # FIX ME
+
+        graphs = [PygGraph.atom_dgl_multigraph(s,
+                                               neighbor_strategy=config.neighbor_strategy,
+                                               cutoff=config.cutoff,
+                                               atom_features="atomic_number",
+                                               max_neighbors=config.max_neighbors,
+                                               use_angle=config.use_angle,
+                                               use_lattice=config.use_lattice,
+                                               use_canonize=config.use_canonize,
+                                               compute_line_graph=False) for s in tqdm(structures)]
+        self.graphs = graphs
         self.target = targets
         self.line_graph = config.line_graph
 
         self.labels = torch.tensor(targets).type(
             torch.get_default_dtype()
         )
-        print("mean %f std %f" % (self.labels.mean(), self.labels.std()))
-        if config.mean_train == None:
-            mean = self.labels.mean()
-            std = self.labels.std()
-            self.labels = (self.labels - mean) / std
-            print("normalize using training mean but shall not be used here %f and std %f" % (mean, std))
-        else:
-            self.labels = (self.labels - config.mean_train) / config.std_train
-            print("normalize using training mean %f and std %f" % (config.mean_train, config.std_train))
 
         self.transform = config.transform
 
@@ -433,9 +406,12 @@ class MatformerData(torch.utils.data.Dataset):
             g.x = f
 
         self.prepare_batch = prepare_pyg_batch
+        self.collate_fn = self.collate_fn_g
         if config.line_graph:
+            self.collate_fn = self.collate_fn_lg
             self.prepare_batch = prepare_pyg_line_graph_batch
             print("building line graphs")
+            print(self.line_graph)
             if config.lineControl == False:
                 self.line_graphs = []
                 self.graphs = []
@@ -494,16 +470,20 @@ class MatformerData(torch.utils.data.Dataset):
         max_z = max(v["Z"] for v in chem_data.values())
 
         # get feature shape (referencing Carbon)
-        template = get_node_attributes("C", atom_features)
+        if atom_features == "mat2vec":
+            id_prop_file = "mat2vec.csv"
+            path = Path(__file__).parent.parent / 'data' / id_prop_file
+            return pd.read_csv(path).to_numpy()[:, 1:].astype("float32")
+        else:
+            template = get_node_attributes("C", atom_features)
+            features = np.zeros((1 + max_z, len(template)))
 
-        features = np.zeros((1 + max_z, len(template)))
+            for element, v in chem_data.items():
+                z = v["Z"]
+                x = get_node_attributes(element, atom_features)
 
-        for element, v in chem_data.items():
-            z = v["Z"]
-            x = get_node_attributes(element, atom_features)
-
-            if x is not None:
-                features[z, :] = x
+                if x is not None:
+                    features[z, :] = x
 
         return features
 
@@ -541,14 +521,14 @@ class MatformerData(torch.utils.data.Dataset):
         )
 
     @staticmethod
-    def collate(samples: List[Tuple[Data, torch.Tensor]]):
+    def collate_fn_g(samples: List[Tuple[Data, torch.Tensor]]):
         """Dataloader helper to batch graphs cross `samples`."""
         graphs, labels = map(list, zip(*samples))
         batched_graph = Batch.from_data_list(graphs)
         return batched_graph, torch.tensor(labels)
 
     @staticmethod
-    def collate_line_graph(
+    def collate_fn_lg(
             samples: List[Tuple[Data, Data, torch.Tensor, torch.Tensor]]
     ):
         """Dataloader helper to batch graphs cross `samples`."""
@@ -556,9 +536,9 @@ class MatformerData(torch.utils.data.Dataset):
         batched_graph = Batch.from_data_list(graphs)
         batched_line_graph = Batch.from_data_list(line_graphs)
         if len(labels[0].size()) > 0:
-            return batched_graph, batched_line_graph, torch.cat([i.unsqueeze(0) for i in lattice]), torch.stack(labels)
+            return (batched_graph, batched_line_graph, torch.cat([i.unsqueeze(0) for i in lattice])), torch.stack(labels)
         else:
-            return batched_graph, batched_line_graph, torch.cat([i.unsqueeze(0) for i in lattice]), torch.tensor(labels)
+            return (batched_graph, batched_line_graph, torch.cat([i.unsqueeze(0) for i in lattice])), torch.tensor(labels)
 
 
 def canonize_edge(
@@ -875,35 +855,58 @@ class PygStandardize(torch.nn.Module):
 
 
 def prepare_pyg_batch(
-        batch: Tuple[Data, torch.Tensor], device=None, non_blocking=False
+        batch: Tuple[Data, torch.Tensor], device=None, non_blocking=False, subset=None
 ):
     """Send batched dgl crystal graph to device."""
     g, t = batch
-    batch = (
-        g.to(device),
+    if subset is not None:
+        return (
+            Batch.from_data_list(g.index_select(list(range(subset)))).to(device=device, non_blocking=non_blocking),
+            t[:subset].to(device=device, non_blocking=non_blocking)
+        )
+
+    return (
+        g.to(device, non_blocking=non_blocking),
         t.to(device, non_blocking=non_blocking),
     )
-
-    return batch
 
 
 def prepare_pyg_line_graph_batch(
         batch: Tuple[Tuple[Data, Data, torch.Tensor], torch.Tensor],
         device=None,
         non_blocking=False,
+        subset=None
 ):
     """Send line graph batch to device.
 
     Note: the batch is a nested tuple, with the graph and line graph together
     """
-    g, lg, lattice, t = batch
+    g, lg, lattice = batch[0]
+
+    t = batch[1]
+    if subset is not None:
+        return (
+            Batch.from_data_list(g.index_select(list(range(subset)))).to(device=device, non_blocking=non_blocking),
+            Batch.from_data_list(lg.index_select(list(range(subset)))).to(device=device, non_blocking=non_blocking),
+            lattice[:subset].to(device, non_blocking=non_blocking),
+            t[:subset].to(device=device, non_blocking=non_blocking)
+        )
+
     batch = (
         (
-            g.to(device),
-            lg.to(device),
+            g.to(device, non_blocking=non_blocking),
+            lg.to(device, non_blocking=non_blocking),
             lattice.to(device, non_blocking=non_blocking),
         ),
         t.to(device, non_blocking=non_blocking),
     )
 
     return batch
+
+
+if __name__ == "__main__":
+    from jarvis.db.figshare import data
+    from jarvis.core.atoms import Atoms
+
+    d = data('dft_2d')
+    atoms = [datum['atoms'] for datum in d]

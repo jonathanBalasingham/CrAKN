@@ -2,6 +2,7 @@ import random
 from functools import partial
 
 import amd
+import jarvis.core.atoms
 import numpy as np
 from tqdm import tqdm
 
@@ -18,6 +19,13 @@ from jarvis.db.figshare import data
 from jarvis.core.atoms import Atoms
 # from matbench.bench import MatbenchBenchmark
 import torch
+
+
+DATA_FORMATS = {
+    "PST": "pymatgen",
+    "Matformer": "jarvis",
+    "SimpleGCN": "pymatgen"
+}
 
 
 def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float], List]:
@@ -44,8 +52,11 @@ def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float],
             ids.append(current_id)
             current_id += 1
         atoms = (Atoms.from_dict(datum["atoms"]) if isinstance(datum["atoms"], dict) else datum["atoms"])
-        structure = atoms.pymatgen_converter()
-        structures.append(structure)
+        if DATA_FORMATS[config.base_config.backbone] == "pymatgen":
+            structure = atoms.pymatgen_converter()
+            structures.append(structure)
+        elif DATA_FORMATS[config.base_config.backbone] == "jarvis":
+            structures.append(atoms)
         targets.append(target)
     return structures, targets, ids
 
@@ -67,6 +78,8 @@ class CrAKNDataset(torch.utils.data.Dataset):
         super().__init__()
         self.data = get_dataset(structures, targets, config.base_config.backbone_config)
 
+        if isinstance(structures[0], jarvis.core.atoms.Atoms):
+            structures = [s.pymatgen_converter() for s in structures]
         periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in
                          tqdm(structures, desc="Creating Periodic Sets..")]
 

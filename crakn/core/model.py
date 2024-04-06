@@ -18,7 +18,7 @@ from random import randrange
 
 class CrAKNConfig(BaseSettings):
     name: Literal["crakn"]
-    backbone: Literal["PST", "SimpleGCN"] = "PST"
+    backbone: Literal["PST", "SimpleGCN", "Matformer"] = "PST"
     backbone_config: Union[PSTConfig, SimpleGCNConfig, MatformerConfig] = PSTConfig(name="PST")
     embedding_dim: int = 64
     layers: int = 4
@@ -303,6 +303,8 @@ class CrAKN(nn.Module):
             neighbor_edge_features = target_edge_features
             neighbor_latt = latt
             neighbor_target = backbone_input[-1]
+            if neighbor_target.dim() == 1:
+                neighbor_target = neighbor_target.unsqueeze(-1)
             num_nodes = neighbor_node_features.shape[0]
             mask = torch.concat([-torch.eye(num_nodes, device=target_node_features.device) + 1,
                                  torch.eye(num_nodes, device=target_node_features.device)], dim=1)

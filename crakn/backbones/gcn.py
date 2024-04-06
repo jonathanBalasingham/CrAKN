@@ -114,9 +114,7 @@ class GCNData(torch.utils.data.Dataset):
     @staticmethod
     def prepare_batch(batch: Tuple[dgl.DGLGraph, torch.Tensor], device=None, non_blocking=False, subset=None):
         """Send batched dgl crystal graph to device."""
-
         g, t = batch
-
         if subset is not None:
             return (
                 dgl.batch(dgl.unbatch(g)[:subset]).to(device=device, non_blocking=non_blocking),

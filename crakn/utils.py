@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 from pydantic_settings import BaseSettings as PydanticBaseSettings
 from pydantic import ConfigDict
+import torch
 
 
 class BaseSettings(PydanticBaseSettings):
@@ -37,3 +38,24 @@ def plot_learning_curve(
     plt.ylabel(key)
 
     return train, val
+
+
+class Normalizer(object):
+
+    def __init__(self, tensor):
+        self.mean = torch.mean(tensor)
+        self.std = torch.std(tensor)
+
+    def norm(self, tensor):
+        return (tensor - self.mean) / self.std
+
+    def denorm(self, normed_tensor):
+        return normed_tensor * self.std + self.mean
+
+    def state_dict(self):
+        return {'mean': self.mean,
+                'std': self.std}
+
+    def load_state_dict(self, state_dict):
+        self.mean = state_dict['mean']
+        self.std = state_dict['std']

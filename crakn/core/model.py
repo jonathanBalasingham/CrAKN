@@ -5,6 +5,7 @@ from torch import nn
 import torch.nn.functional as F
 import math
 
+from crakn.backbones.matformer import MatformerConfig, Matformer
 from crakn.backbones.utils import RBFExpansion
 from crakn.utils import BaseSettings
 from typing import Literal, Union, Tuple
@@ -18,7 +19,7 @@ from random import randrange
 class CrAKNConfig(BaseSettings):
     name: Literal["crakn"]
     backbone: Literal["PST", "SimpleGCN"] = "PST"
-    backbone_config: Union[PSTConfig, SimpleGCNConfig] = PSTConfig(name="PST")
+    backbone_config: Union[PSTConfig, SimpleGCNConfig, MatformerConfig] = PSTConfig(name="PST")
     embedding_dim: int = 64
     layers: int = 4
     num_heads: int = 4
@@ -31,7 +32,7 @@ class CrAKNConfig(BaseSettings):
     attention_bias: bool = True
     embed_bias: bool = True
     cutoff: float = 1
-    expansion_size: int = 40
+    expansion_size: int = 128
 
 
 def get_backbone(bb: str, bb_config) -> nn.Module:
@@ -39,6 +40,8 @@ def get_backbone(bb: str, bb_config) -> nn.Module:
         return PeriodicSetTransformer(bb_config)
     elif bb == "SimpleGCN":
         return SimpleGCN(bb_config)
+    elif bb == "Matformer":
+        return Matformer(bb_config)
     else:
         raise NotImplementedError(f"Unknown backbone: {bb}")
 
@@ -250,6 +253,7 @@ class CrAKNEncoder(nn.Module):
             diffs = None
 
         values, attention = self.scaled_dot_product(proj_q, proj_k, proj_v, mask=mask, bias=diffs)
+
         values = values.permute(1, 0, 2).reshape(q_shape[0], self.vdim * self.num_heads)
         proj_q = proj_q.permute(1, 2, 0).reshape(q_shape[0], self.num_heads * self.head_dim)
         proj_k = proj_k.permute(1, 2, 0).reshape(k_shape[0], self.num_heads * self.head_dim)
@@ -265,7 +269,7 @@ class CrAKN(nn.Module):
         super().__init__()
         self.backbone = get_backbone(config.backbone, bb_config=config.backbone_config)
         # self.layers = [CrAKNLayer(config.embedding_dim) for _ in range(config.layers)]
-        self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim)
+        self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim )
         self.expansion = RBFExpansion(0, config.cutoff, config.expansion_size)
         self.layers = nn.ModuleList(
             [CrAKNEncoder(config.embedding_dim, config.embedding_dim, 1,
@@ -273,11 +277,6 @@ class CrAKN(nn.Module):
                           embed_value=False, bias_dim=config.expansion_size)
              for _ in range(config.layers)])
 
-        self.ffns = nn.ModuleList(
-            nn.Sequential(nn.Linear(config.embedding_dim, config.embedding_dim),
-                          nn.ReLU(),
-                          nn.Linear(config.embedding_dim, config.embedding_dim))
-        )
         self.ln1 = nn.LayerNorm(config.embedding_dim)
         self.ln2 = nn.LayerNorm(config.embedding_dim)
         if config.backbone_only:
@@ -290,6 +289,8 @@ class CrAKN(nn.Module):
         self.attention_bias = config.attention_bias
         self.embed_bias = config.embed_bias
         self.cutoff = config.cutoff
+        self.crakn_out = nn.Sequential(nn.Linear(config.num_heads * config.embedding_dim, config.embedding_dim),
+                                       nn.Mish(), nn.Linear(config.embedding_dim, 1))
 
     def forward(self, inputs, neighbors=None) -> torch.Tensor:
         backbone_input, target_edge_features, latt, _ = inputs

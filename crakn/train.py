@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from crakn.core.model import CrAKN
+from crakn.utils import Normalizer
 
 try:
     from ignite.contrib.handlers.stores import EpochOutputStore
@@ -181,8 +182,8 @@ def train_crakn(
 
     net.to(device)
     # group parameters to skip weight decay for bias and batchnorm
-    params = group_decay(net)
-    optimizer = setup_optimizer(params, config)
+    #params = group_decay(net)
+    optimizer = setup_optimizer(net.parameters(), config)
 
     if config.scheduler == "none":
         scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -198,7 +199,7 @@ def train_crakn(
             pct_start=0.3,
         )
     elif config.scheduler == "step":
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, )
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=config.lr_milestones, gamma=0.1)
 
     criteria = {
         "mse": nn.MSELoss(),
@@ -208,7 +209,9 @@ def train_crakn(
     criterion = criteria[config.criterion]
 
     # set up training engine and evaluators
+
     metrics = {"loss": Loss(criterion), "mae": MeanAbsoluteError()}
+
     if config.base_config.output_features > 1 and config.standard_scalar_and_pca:
         metrics = {
             "loss": Loss(
@@ -504,6 +507,7 @@ def train_crakn(
                     ensemble_predictions = torch.stack(out_data)
                     # print(f"SD of preds: {torch.mean(torch.std(ensemble_predictions, dim=0))}")
                     out_data = torch.mean(ensemble_predictions, dim=0)
+                    #out_data = normalizer.denorm(out_data)
                 else:
                     out_data = net(
                         (test_bb_data + [torch.zeros(bb_data[1].shape).to(device)],

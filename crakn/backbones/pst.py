@@ -15,6 +15,7 @@ from pathlib import Path
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
 from .utils import DistanceExpansion, AtomFeaturizer
+from .pdd_helpers import custom_PDD
 
 
 class PSTConfig(BaseSettings):
@@ -32,7 +33,7 @@ class PSTConfig(BaseSettings):
     expansion_size: int = 10
     k: int = 15
     collapse_tol: float = 1e-4
-    atom_encoding: str = "mat2vec"
+    atom_features: str = "mat2vec"
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
@@ -153,11 +154,11 @@ class PeriodicSetTransformer(nn.Module):
     def __init__(self, config: PSTConfig = PSTConfig(name="PST")):
         super(PeriodicSetTransformer, self).__init__()
 
-        if config.atom_encoding not in ["mat2vec", "cgcnn"]:
+        if config.atom_features not in ["mat2vec", "cgcnn"]:
             raise ValueError(f"atom_encoding_dim must be in {['mat2vec', 'cgcnn']}")
         else:
-            atom_encoding_dim = 200 if config.atom_encoding == "mat2vec" else 92
-            id_prop_file = "mat2vec.csv" if config.atom_encoding == "mat2vec" else "atom_init.json"
+            atom_encoding_dim = 200 if config.atom_features == "mat2vec" else 92
+            id_prop_file = "mat2vec.csv" if config.atom_features == "mat2vec" else "atom_init.json"
 
         self.pdd_embedding_layer = nn.Linear(config.k * config.expansion_size, config.embedding_features)
         self.comp_embedding_layer = nn.Linear(atom_encoding_dim, config.embedding_features)
@@ -221,12 +222,14 @@ class PSTData(torch.utils.data.Dataset):
         pdds = []
         periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in structures]
         atom_fea = []
-        for i in tqdm(range(len(periodic_sets)),
+        for ind in tqdm(range(len(periodic_sets)),
                       desc="Creating PDDs…",
                       ascii=False, ncols=75):
-            ps = periodic_sets[i]
-            pdd = amd.PDD(ps, k=self.k, collapse=False, collapse_tol=self.collapse_tol)
-            atom_features = ps.types[ps.asym_unit][:, None]
+            ps = periodic_sets[ind]
+            pdd, groups, inds, _ = custom_PDD(ps, k=self.k, collapse=True, collapse_tol=self.collapse_tol,
+                                              constrained=True, lexsort=False)
+            indices_in_graph = [i[0] for i in groups]
+            atom_features = ps.types[indices_in_graph][:, None]
             atom_fea.append(atom_features)
             pdds.append(pdd)
 

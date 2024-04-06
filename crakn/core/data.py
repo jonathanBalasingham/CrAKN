@@ -6,6 +6,7 @@ import numpy as np
 from tqdm import tqdm
 
 from crakn.backbones.gcn import GCNData
+from crakn.backbones.matformer import MatformerData
 from crakn.backbones.pst import PSTData
 from crakn.config import TrainingConfig
 
@@ -54,6 +55,8 @@ def get_dataset(structures, targets, config):
         return PSTData(structures, targets, config)
     elif config.name == "SimpleGCN":
         return GCNData(structures, targets, config)
+    elif config.name == "Matformer":
+        return MatformerData(structures, targets, config)
     else:
         raise NotImplementedError(f"Not implemented yet, {config.name}")
 

@@ -194,8 +194,8 @@ class Matformer(nn.Module):
         node_features = self.att_layers[0](node_features, data.edge_index, edge_features)
         node_features = self.att_layers[1](node_features, data.edge_index, edge_features)
         node_features = self.att_layers[2](node_features, data.edge_index, edge_features)
-        node_features = self.att_layers[3](node_features, data.edge_index, edge_features)
-        node_features = self.att_layers[4](node_features, data.edge_index, edge_features)
+        #node_features = self.att_layers[3](node_features, data.edge_index, edge_features)
+        #node_features = self.att_layers[4](node_features, data.edge_index, edge_features)
 
         # crystal-level readout
         features = scatter(node_features, data.batch, dim=0, reduce="mean")

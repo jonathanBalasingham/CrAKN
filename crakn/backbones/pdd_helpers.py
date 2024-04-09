@@ -117,6 +117,10 @@ def get_angles(motif, cloud, inds):
     return angles
 
 
+def get_relative_vectors(groups, cloud, inds):
+    return cloud[[[i[0]] for i in groups]] - cloud[inds]
+
+
 if __name__ == "__main__":
     from jarvis.db.figshare import data
     from jarvis.core.atoms import Atoms

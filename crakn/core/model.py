@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import math
 
 from crakn.backbones.matformer import MatformerConfig, Matformer
+from crakn.backbones.pst_v2 import PeriodicSetTransformerV2, PSTv2Config
 from crakn.backbones.utils import RBFExpansion
 from crakn.utils import BaseSettings
 from typing import Literal, Union, Tuple
@@ -18,8 +19,8 @@ from random import randrange
 
 class CrAKNConfig(BaseSettings):
     name: Literal["crakn"]
-    backbone: Literal["PST", "SimpleGCN", "Matformer"] = "PST"
-    backbone_config: Union[PSTConfig, SimpleGCNConfig, MatformerConfig] = PSTConfig(name="PST")
+    backbone: Literal["PST", "SimpleGCN", "Matformer", "PSTv2"] = "PST"
+    backbone_config: Union[PSTConfig, SimpleGCNConfig, MatformerConfig, PSTv2Config] = PSTConfig(name="PST")
     embedding_dim: int = 64
     layers: int = 4
     num_heads: int = 4
@@ -38,6 +39,8 @@ class CrAKNConfig(BaseSettings):
 def get_backbone(bb: str, bb_config) -> nn.Module:
     if bb == "PST":
         return PeriodicSetTransformer(bb_config)
+    elif bb == "PSTv2":
+        return PeriodicSetTransformerV2(bb_config)
     elif bb == "SimpleGCN":
         return SimpleGCN(bb_config)
     elif bb == "Matformer":

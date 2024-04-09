@@ -9,6 +9,7 @@ from tqdm import tqdm
 from crakn.backbones.gcn import GCNData
 from crakn.backbones.matformer import MatformerData
 from crakn.backbones.pst import PSTData
+from crakn.backbones.pst_v2 import PSTv2Data
 from crakn.config import TrainingConfig
 
 from torch.utils.data import Dataset, DataLoader
@@ -24,7 +25,8 @@ import torch
 DATA_FORMATS = {
     "PST": "pymatgen",
     "Matformer": "jarvis",
-    "SimpleGCN": "pymatgen"
+    "SimpleGCN": "pymatgen",
+    "PSTv2": "pymatgen"
 }
 
 
@@ -64,6 +66,8 @@ def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float],
 def get_dataset(structures, targets, config):
     if config.name == "PST":
         return PSTData(structures, targets, config)
+    elif config.name == "PSTv2":
+        return PSTv2Data(structures, targets, config)
     elif config.name == "SimpleGCN":
         return GCNData(structures, targets, config)
     elif config.name == "Matformer":

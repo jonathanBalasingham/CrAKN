@@ -59,84 +59,22 @@ def weighted_softmax(x, dim=-1, weights=None):
     return probs
 
 
-class GroupedLinear(nn.Module):
-    __constants__ = ["in_features", "out_features", "groups"]
-    in_features: int
-    out_features: int
-    groups: int
-    weight: torch.Tensor
-
-    def __init__(
-        self, in_features: int, out_features: int, groups: int, device=None, dtype=None
-    ) -> None:
-        factory_kwargs = {"device": device, "dtype": dtype}
-        super(GroupedLinear, self).__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.groups = groups
-        assert in_features & groups == 0
-        assert out_features % groups == 0
-        # for convenient, currently only support out_features == groups, one output
-        assert out_features == groups
-        self.weight = nn.Parameter(torch.empty((1, in_features), **factory_kwargs))
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return (
-            (input * self.weight)
-            .reshape(
-                list(input.shape[:-1]) + [self.groups, input.shape[-1] // self.groups]
-            )
-            .sum(-1)
-        )
-
-    def extra_repr(self) -> str:
-        return "in_features={}, out_features={}, bias={}".format(
-            self.in_features, self.out_features, self.bias is not None
-        )
-
-
-class PointBatchNorm(nn.Module):
-    """
-    Batch Normalization for Point Clouds data in shape of [B*N, C], [B*N, L, C]
-    """
-
-    def __init__(self, embed_channels):
-        super().__init__()
-        self.norm = nn.BatchNorm1d(embed_channels)
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if input.dim() == 3:
-            return (
-                self.norm(input.transpose(1, 2).contiguous())
-                .transpose(1, 2)
-                .contiguous()
-            )
-        elif input.dim() == 2:
-            return self.norm(input)
-        else:
-            raise NotImplementedError
-
-
 class VectorAttention(nn.Module):
     def __init__(
         self,
         embed_channels,
         attention_dropout=0.0,
         qkv_bias=True,
-        pe_multiplier=True,
-        pe_bias=True,
+        use_multiplier=True,
+        use_bias=True,
         activation=nn.ReLU
     ):
         super(VectorAttention, self).__init__()
         self.embed_channels = embed_channels
         self.attn_drop_rate = attention_dropout
         self.qkv_bias = qkv_bias
-        self.pe_multiplier = pe_multiplier
-        self.pe_bias = pe_bias
+        self.delta_mul = use_multiplier
+        self.delta_bias = use_bias
 
         self.linear_q = nn.Sequential(
             nn.Linear(embed_channels, embed_channels, bias=qkv_bias),
@@ -151,14 +89,14 @@ class VectorAttention(nn.Module):
 
         self.linear_v = nn.Linear(embed_channels, embed_channels, bias=qkv_bias)
 
-        if self.pe_multiplier:
+        if self.delta_mul:
             self.linear_p_multiplier = nn.Sequential(
                 nn.Linear(3, embed_channels),
                 nn.LayerNorm(embed_channels),
                 activation(inplace=True),
                 nn.Linear(embed_channels, embed_channels),
             )
-        if self.pe_bias:
+        if self.delta_bias:
             self.linear_p_bias = nn.Sequential(
                 nn.Linear(3, embed_channels),
                 nn.LayerNorm(embed_channels),
@@ -181,13 +119,12 @@ class VectorAttention(nn.Module):
             self.linear_v(feat),
         )
         relation_qk = key.unsqueeze(-3) - query.unsqueeze(-2)
-        if self.pe_multiplier:
+        if self.delta_mul:
             pem = self.linear_p_multiplier(pos)
             relation_qk = relation_qk * pem
-        if self.pe_bias:
+        if self.delta_bias:
             peb = self.linear_p_bias(pos)
             relation_qk = relation_qk + peb
-            #value = value + peb
 
         weight = self.weight_encoding(relation_qk)
         weight = self.attn_drop(self.softmax(weight))

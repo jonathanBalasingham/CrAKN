@@ -8,7 +8,6 @@ import math
 
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
-import einops
 
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
@@ -65,8 +64,8 @@ class VectorAttention(nn.Module):
         embed_channels,
         attention_dropout=0.0,
         qkv_bias=True,
-        use_multiplier=True,
-        use_bias=True,
+        use_multiplier=False,
+        use_bias=False,
         activation=nn.ReLU
     ):
         super(VectorAttention, self).__init__()

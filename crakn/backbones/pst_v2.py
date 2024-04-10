@@ -37,10 +37,10 @@ class PSTv2Config(BaseSettings):
 
 class MLP(nn.Module):
 
-    def __init__(self, input_dim: int, layers: int, dim: int, activation):
+    def __init__(self, input_dim: int, embedding_dim: int, layers: int, activation):
         super().__init__()
-        self.embedding = nn.Linear(input_dim, dim)
-        self.net = nn.ModuleList([nn.Sequential(nn.Linear(dim, dim), activation()) for _ in range(layers-1)])
+        self.embedding = nn.Linear(input_dim, embedding_dim)
+        self.net = nn.ModuleList([nn.Sequential(nn.Linear(embedding_dim, embedding_dim), activation()) for _ in range(layers - 1)])
 
     def forward(self, x):
         x = self.embedding(x)
@@ -112,7 +112,7 @@ class VectorAttention(nn.Module):
         self.softmax = nn.Softmax(dim=2)
         self.attn_drop = nn.Dropout(attention_dropout)
 
-    def forward(self, feat, pos, dist):
+    def forward(self, feat, pos, distribution):
         query, key, value = (
             self.linear_q(feat),
             self.linear_k(feat),
@@ -127,18 +127,17 @@ class VectorAttention(nn.Module):
             relation_qk = relation_qk + peb
 
         weight = self.weight_encoding(relation_qk)
-        weight = self.attn_drop(self.softmax(weight))
+        weight = self.attn_drop(weighted_softmax(weight, dim=-2, weights=distribution.unsqueeze(1)))
 
-        mask = dist.unsqueeze(1)
-        mask = (mask * mask.transpose(-1, -2)) > 0
+        mask = (distribution * distribution.transpose(-1, -2)) > 0
         weight = weight * mask.unsqueeze(-1)
         feat = torch.einsum("b i j k, b j k -> b i k", weight, value)
         return feat
 
 
-class PeriodicSetTransformerEncoder(nn.Module):
+class PeriodicSetTransformerV2Encoder(nn.Module):
     def __init__(self, embedding_dim, num_heads, attention_dropout=0.0, dropout=0.0, activation=nn.Mish):
-        super(PeriodicSetTransformerEncoder, self).__init__()
+        super(PeriodicSetTransformerV2Encoder, self).__init__()
         self.embedding = nn.Linear(embedding_dim, embedding_dim * num_heads)
         self.out = nn.Linear(embedding_dim * num_heads, embedding_dim)
         self.vector_attention = VectorAttention(embedding_dim, attention_dropout)
@@ -147,9 +146,9 @@ class PeriodicSetTransformerEncoder(nn.Module):
         self.ffn = nn.Sequential(nn.Linear(embedding_dim, embedding_dim),
                                  activation())
 
-    def forward(self, x, weights, pos):
+    def forward(self, x, distribution, pos):
         x_norm = self.ln(x)
-        att_output = self.vector_attention(x_norm, pos, weights)
+        att_output = self.vector_attention(x_norm, pos, distribution)
         output1 = x + self.out(att_output)
         output2 = self.ln(output1)
         output2 = self.ffn(output2)
@@ -169,7 +168,6 @@ class PeriodicSetTransformerV2(nn.Module):
 
         self.pdd_embedding_layer = nn.Linear(config.k * config.expansion_size, config.embedding_features)
         self.comp_embedding_layer = nn.Linear(atom_encoding_dim, config.embedding_features)
-        self.dropout_layer = nn.Dropout(p=config.dropout)
         self.af = AtomFeaturizer(use_cuda=config.use_cuda, id_prop_file=id_prop_file)
         self.de = DistanceExpansion(size=config.expansion_size, use_cuda=config.use_cuda)
         self.ln = nn.LayerNorm(config.embedding_features)
@@ -177,24 +175,21 @@ class PeriodicSetTransformerV2(nn.Module):
         self.pos_embedding = nn.Linear(config.bias_expansion, config.embedding_features)
 
         self.encoders = nn.ModuleList(
-            [PeriodicSetTransformerEncoder(config.embedding_features, config.num_heads,
-                                           attention_dropout=config.attention_dropout,
-                                           activation=nn.Mish) for _ in
+            [PeriodicSetTransformerV2Encoder(config.embedding_features, config.num_heads,
+                                             attention_dropout=config.attention_dropout,
+                                             activation=nn.Mish) for _ in
              range(config.encoders)])
-        self.decoder = nn.ModuleList([nn.Linear(config.embedding_features, config.embedding_features)
-                                      for _ in range(config.decoder_layers - 1)])
-        self.activations = nn.ModuleList([nn.Mish()
-                                          for _ in range(config.decoder_layers - 1)])
+        self.decoder = MLP(config.embedding_features, config.embedding_features,
+                           config.decoder_layers, nn.Mish)
         self.out = nn.Linear(config.embedding_features, config.output_features)
         print(f"Output of PSTv2 will have dimension: {config.output_features}")
 
     def forward(self, features):
         str_fea, comp_fea, cloud_fea = features
-        weights = str_fea[:, :, 0, None]
-        comp_features = self.af(comp_fea)
-        comp_features = self.comp_embedding_layer(comp_features)
-        comp_features = self.dropout_layer(comp_features)
+        distribution = str_fea[:, :, 0, None]
         str_features = str_fea[:, :, 1:]
+
+        comp_features = self.comp_embedding_layer(self.af(comp_fea))
         str_features = self.pdd_embedding_layer(self.de(str_features))
 
         x = comp_features + str_features
@@ -205,15 +200,10 @@ class PeriodicSetTransformerV2(nn.Module):
 
         x_init = x
         for encoder in self.encoders:
-            x = encoder(x, weights.squeeze(-1), pos)
+            x = encoder(x, distribution, pos)
 
-        x = torch.sum(weights * (x + x_init), dim=1)
-
-        x = self.ln(x)
-        for layer, activation in zip(self.decoder, self.activations):
-            x = layer(x)
-            x = activation(x)
-
+        x = torch.sum(distribution * (x + x_init), dim=1)
+        x = self.decoder(self.ln(x))
         return self.out(x)
 
 
@@ -240,7 +230,7 @@ class PSTv2Data(torch.utils.data.Dataset):
                       desc="Creating PDDs…",
                       ascii=False, ncols=75):
             ps = periodic_sets[ind]
-            pdd, groups, inds, cloud = custom_PDD(ps, k=self.k, collapse=False, collapse_tol=self.collapse_tol,
+            pdd, groups, inds, cloud = custom_PDD(ps, k=self.k, collapse=True, collapse_tol=self.collapse_tol,
                                               constrained=True, lexsort=False)
             indices_in_graph = [i[0] for i in groups]
             atom_features = ps.types[indices_in_graph][:, None]

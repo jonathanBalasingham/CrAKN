@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
-from .utils import DistanceExpansion, AtomFeaturizer
+from .utils import DistanceExpansion, AtomFeaturizer, RBFExpansion
 from .pdd_helpers import custom_PDD, get_relative_vectors
 
 
@@ -28,6 +28,7 @@ class PSTv2Config(BaseSettings):
     use_cuda: bool = torch.cuda.is_available()
     decoder_layers: int = 2
     expansion_size: int = 10
+    bias_expansion: int = 40
     k: int = 15
     collapse_tol: float = 1e-4
     atom_features: str = "mat2vec"
@@ -66,7 +67,7 @@ class VectorAttention(nn.Module):
         qkv_bias=True,
         use_multiplier=False,
         use_bias=False,
-        activation=nn.ReLU
+        activation=nn.Mish
     ):
         super(VectorAttention, self).__init__()
         self.embed_channels = embed_channels
@@ -90,14 +91,14 @@ class VectorAttention(nn.Module):
 
         if self.delta_mul:
             self.linear_p_multiplier = nn.Sequential(
-                nn.Linear(3, embed_channels),
+                nn.Linear(embed_channels, embed_channels),
                 nn.LayerNorm(embed_channels),
                 activation(inplace=True),
                 nn.Linear(embed_channels, embed_channels),
             )
         if self.delta_bias:
             self.linear_p_bias = nn.Sequential(
-                nn.Linear(3, embed_channels),
+                nn.Linear(embed_channels, embed_channels),
                 nn.LayerNorm(embed_channels),
                 activation(inplace=True),
                 nn.Linear(embed_channels, embed_channels),
@@ -108,7 +109,7 @@ class VectorAttention(nn.Module):
             activation(inplace=True),
             nn.Linear(embed_channels, embed_channels),
         )
-        self.softmax = nn.Softmax(dim=1)
+        self.softmax = nn.Softmax(dim=2)
         self.attn_drop = nn.Dropout(attention_dropout)
 
     def forward(self, feat, pos, dist):
@@ -131,9 +132,7 @@ class VectorAttention(nn.Module):
         mask = dist.unsqueeze(1)
         mask = (mask * mask.transpose(-1, -2)) > 0
         weight = weight * mask.unsqueeze(-1)
-        #weight = torch.einsum("b n s g, n s -> b n s g", weight, mask)
-        #feat = torch.einsum("n s g i, n s g -> n g i", value, weight)
-        feat = torch.einsum("b i j k, b i l -> b i l", weight, value)
+        feat = torch.einsum("b i j k, b j k -> b i k", weight, value)
         return feat
 
 
@@ -174,9 +173,12 @@ class PeriodicSetTransformerV2(nn.Module):
         self.af = AtomFeaturizer(use_cuda=config.use_cuda, id_prop_file=id_prop_file)
         self.de = DistanceExpansion(size=config.expansion_size, use_cuda=config.use_cuda)
         self.ln = nn.LayerNorm(config.embedding_features)
+        self.rbf = RBFExpansion(bins=config.bias_expansion)
+        self.pos_embedding = nn.Linear(config.bias_expansion, config.embedding_features)
 
         self.encoders = nn.ModuleList(
-            [PeriodicSetTransformerEncoder(config.embedding_features, config.num_heads, attention_dropout=config.attention_dropout,
+            [PeriodicSetTransformerEncoder(config.embedding_features, config.num_heads,
+                                           attention_dropout=config.attention_dropout,
                                            activation=nn.Mish) for _ in
              range(config.encoders)])
         self.decoder = nn.ModuleList([nn.Linear(config.embedding_features, config.embedding_features)
@@ -197,6 +199,9 @@ class PeriodicSetTransformerV2(nn.Module):
 
         x = comp_features + str_features
         pos = cloud_fea.unsqueeze(1) - cloud_fea.unsqueeze(2)
+        pos = torch.norm(pos, dim=-1, keepdim=True)
+        pos = self.rbf(pos).squeeze()
+        pos = self.pos_embedding(pos)
 
         x_init = x
         for encoder in self.encoders:

@@ -191,11 +191,8 @@ class Matformer(nn.Module):
         edge_feat = torch.norm(data.edge_attr, dim=1)
 
         edge_features = self.rbf(edge_feat)
-        node_features = self.att_layers[0](node_features, data.edge_index, edge_features)
-        node_features = self.att_layers[1](node_features, data.edge_index, edge_features)
-        node_features = self.att_layers[2](node_features, data.edge_index, edge_features)
-        #node_features = self.att_layers[3](node_features, data.edge_index, edge_features)
-        #node_features = self.att_layers[4](node_features, data.edge_index, edge_features)
+        for attn_layer in self.att_layers:
+            node_features = attn_layer(node_features, data.edge_index, edge_features)
 
         # crystal-level readout
         features = scatter(node_features, data.batch, dim=0, reduce="mean")

@@ -21,7 +21,6 @@ from jarvis.core.atoms import Atoms
 # from matbench.bench import MatbenchBenchmark
 import torch
 
-
 DATA_FORMATS = {
     "PST": "pymatgen",
     "Matformer": "jarvis",
@@ -91,6 +90,26 @@ class CrAKNDataset(torch.utils.data.Dataset):
                                for ps in tqdm(periodic_sets, desc="Calculating AMDs..")])
         self.lattices = np.array([list(s.lattice.parameters)
                                   for s in tqdm(structures, desc="Retrieving lattices..")])
+        self.targets = targets
+        self.ids = ids
+
+    def __len__(self):
+        """Get length."""
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        """Get StructureDataset sample."""
+        return (self.data[idx], torch.Tensor(self.amds[idx]), torch.Tensor(self.lattices[idx]),
+                self.ids[idx], torch.Tensor([self.targets[idx]]))
+
+
+class PretrainCrAKNDataset(torch.utils.data.Dataset):
+
+    def __init__(self, vlm_output, amds, lattices, targets, ids):
+        super().__init__()
+        self.data = vlm_output
+        self.amds = amds
+        self.lattices = lattices
         self.targets = targets
         self.ids = ids
 

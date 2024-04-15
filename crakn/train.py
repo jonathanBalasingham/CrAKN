@@ -52,6 +52,31 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 torch.set_default_dtype(torch.float32)
 
 
+
+def setup_optimizer(params, config: TrainingConfig):
+    """Set up optimizer for param groups."""
+    if config.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(
+            params,
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+        )
+    elif config.optimizer == "sgd":
+        optimizer = torch.optim.SGD(
+            params,
+            lr=config.learning_rate,
+            momentum=0.9,
+            weight_decay=config.weight_decay,
+        )
+    elif config.optimizer == "adam":
+        optimizer = torch.optim.Adam(
+            params,
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay
+        )
+    return optimizer
+
+
 def activated_output_transform(output):
     """Exponentiate output."""
     y_pred, y = output
@@ -93,30 +118,6 @@ def group_decay(model):
         {"params": decay},
         {"params": no_decay, "weight_decay": 0},
     ]
-
-
-def setup_optimizer(params, config: TrainingConfig):
-    """Set up optimizer for param groups."""
-    if config.optimizer == "adamw":
-        optimizer = torch.optim.AdamW(
-            params,
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay,
-        )
-    elif config.optimizer == "sgd":
-        optimizer = torch.optim.SGD(
-            params,
-            lr=config.learning_rate,
-            momentum=0.9,
-            weight_decay=config.weight_decay,
-        )
-    elif config.optimizer == "adam":
-        optimizer = torch.optim.Adam(
-            params,
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay
-        )
-    return optimizer
 
 
 def train_crakn(

@@ -295,11 +295,14 @@ class CrAKN(nn.Module):
         self.crakn_out = nn.Sequential(nn.Linear(config.num_heads * config.embedding_dim, config.embedding_dim),
                                        nn.Mish(), nn.Linear(config.embedding_dim, 1))
 
-    def forward(self, inputs, neighbors=None) -> torch.Tensor:
+    def forward(self, inputs, neighbors=None, direct=False) -> torch.Tensor:
         backbone_input, target_edge_features, latt, _ = inputs
 
-        data = backbone_input[:-1]
-        target_node_features = self.backbone(data)
+        if direct:
+            target_node_features = backbone_input[0]
+        else:
+            data = backbone_input[:-1]
+            target_node_features = self.backbone(data)
 
         if neighbors is None:
             neighbor_node_features = target_node_features

@@ -1,32 +1,26 @@
+import json
 import pickle
+import pprint
 import time
-from functools import partial, reduce
+from functools import reduce
+from typing import Union, Dict
 
-from typing import Any, Dict, Union, Tuple
+import numpy as np
+import torch
+from ignite.metrics import Loss, MeanAbsoluteError
 from sklearn.metrics import mean_absolute_error
-from torch.utils.data import DataLoader
+from torch import nn
 from tqdm import tqdm
 
-from crakn.core.model import CrAKN
-from crakn.utils import Normalizer, mae, mse, rmse, AverageMeter
-import pickle as pk
-import numpy as np
-
-from ignite.metrics import Loss, MeanAbsoluteError
-from torch import nn
-
-from crakn.core.data import get_dataloader, retrieve_data, CrAKNDataset, prepare_crakn_batch
-
-import json
-import pprint
-
-import torch
 from crakn.config import TrainingConfig
-from crakn.train import setup_optimizer
-from jarvis.db.jsonutils import loadjson, dumpjson
+from jarvis.db.jsonutils import loadjson
 import argparse
+import os
 
-
+from crakn.core.data import PretrainCrAKNDataset
+from crakn.core.model import CrAKN
+from crakn.train import setup_optimizer
+from crakn.utils import mae, mse, rmse, Normalizer, AverageMeter
 
 device = "cpu"
 if torch.cuda.is_available():
@@ -52,86 +46,51 @@ parser.add_argument(
     help="Target property"
 )
 
+parser.add_argument(
+    "--model-path",
+    default="",
+    help="Path to saved Torch Model"
+)
 
-def train_vlm(
-        config: Union[TrainingConfig, Dict[str, Any]],
-        model: nn.Module = None,
-        dataloaders: Tuple[DataLoader, DataLoader, DataLoader] = None,
-        return_predictions: bool = False):
-    """Training entry point for DGL networks.
 
-    `config` should conform to alignn.conf.TrainingConfig, and
-    if passed as a dict with matching keys, pydantic validation is used
-    """
+
+def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_predictions=False):
     import os
+    suffix = f"{config.base_config.backbone}_{config.dataset}_{config.target}"
+    model_file = f"model_{suffix}"
+    dataloader_file = f"dataloader_{suffix}"
+    id_file = f"train_test_ids_{suffix}.json"
+    dataloader_path = os.path.join(model_path, dataloader_file)
+    train_test_id_path = os.path.join(model_path, id_file)
+
+    vlm = torch.load(os.path.join(model_path, model_file))
+    vlm.eval()
+
+    with open(dataloader_path, "rb") as f:
+        train_loader, val_loader, test_loader = pickle.load(f)
+
+    with open(train_test_id_path, "r") as f:
+        train_test_ids = json.load(f)
 
     if type(config) is dict:
         config = TrainingConfig(**config)
 
-    output_directory = f"{config.base_config.backbone}_{config.dataset}_{config.target}"
-    output_path = os.path.join(config.output_dir, output_directory)
     if not os.path.exists(config.output_dir):
         os.makedirs(config.output_dir)
 
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
-
-    checkpoint_dir = os.path.join(output_path)
-    deterministic = False
-    classification = False
-
     tmp = config.dict()
-    f = open(os.path.join(output_path, "config.json"), "w")
+    f = open(os.path.join(config.output_dir,
+                          f"config_crakn_{config.base_config.backbone}_{config.dataset}_{config.target}.json"), "w")
     f.write(json.dumps(tmp, indent=4))
     f.close()
 
-    global tmp_output_dir
-    tmp_output_dir = output_path
-    pprint.pprint(tmp)
-
-    if config.classification_threshold is not None:
-        classification = True
-    if config.random_seed is not None:
-        deterministic = True
-        torch.cuda.manual_seed_all(config.random_seed)
-
-    if dataloaders is None:
-        structures, targets, ids = retrieve_data(config)
-        dataset = CrAKNDataset(structures, targets, ids, config)
-        train_loader, val_loader, test_loader = get_dataloader(dataset, config)
-    else:
-        train_loader, val_loader, test_loader = dataloaders
-
-    dataloader_savepath = os.path.join(output_path,
-                                       f"dataloader_{config.base_config.backbone}_{config.dataset}_{config.target}")
-    with open(dataloader_savepath, "wb") as f:
-        pickle.dump((train_loader, val_loader, test_loader), f)
-
-    train_ids = [i for dat in train_loader for i in dat[-2]]
-    val_ids = [i for dat in val_loader for i in dat[-2]]
-    test_ids = [i for dat in test_loader for i in dat[-2]]
-    model_name = config.base_config.backbone
-    dumpjson({"train_id": train_ids, "val_id": val_ids, "test_id": test_ids},
-             os.path.join(output_path, f"train_test_ids_{model_name}_{config.dataset}_{config.target}.json"))
-
-    device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
-
-    prepare_batch = partial(prepare_crakn_batch, device=device,
-                            internal_prepare_batch=train_loader.dataset.data.prepare_batch,
-                            variable=config.variable_batch_size)
-
-    prepare_batch_test = partial(prepare_crakn_batch, device=device,
-                                 internal_prepare_batch=train_loader.dataset.data.prepare_batch,
-                                 variable=False)
-    if classification:
-        config.base_config.classification = True
-
-    if model is None:
-        net = CrAKN(config.base_config).backbone
-    else:
-        net = model
+    net = CrAKN(config.base_config)
 
     net.to(device)
+    vlm.to(device)
+    net.backbone = vlm
+    net.backbone.eval()
+
     optimizer = setup_optimizer(net.parameters(), config)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=config.lr_milestones, gamma=0.1)
 
@@ -164,6 +123,17 @@ def train_vlm(
     sample_targets = torch.concat([data[-1] for data in tqdm(train_loader, "Normalizing..")], dim=0)
     normalizer = Normalizer(sample_targets)
 
+    with torch.no_grad():
+        node_features = []
+        for dat in train_loader:
+            bb_data, amds, latt, ids, target = dat
+            train_inputs = bb_data[0]
+            if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
+                train_inputs = [i.to(device) for i in train_inputs]
+            else:
+                train_inputs = train_inputs.to(device)
+            node_features.append(vlm(train_inputs, return_embedding=True)[-1].cpu())
+
     # train the model!
     for epoch in range(config.epochs):
         batch_time = AverageMeter()
@@ -172,14 +142,11 @@ def train_vlm(
         mae_errors = AverageMeter()
         end = time.time()
         net.train()
-        for step, dat in enumerate(train_loader):
+        for step, (nf, dat) in enumerate(zip(node_features, train_loader)):
             bb_data, amds, latt, ids, target = dat
-            train_inputs = bb_data[0]
-            if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
-                train_inputs = [i.to(device) for i in train_inputs]
-            else:
-                train_inputs = train_inputs.to(device)
             target_normed = normalizer.norm(target).to(device)
+            train_inputs = (nf.to(device), normalizer.norm(torch.Tensor(bb_data[-1])).to(device)), amds.to(device), latt.to(device), ids
+
             output = net(train_inputs, direct=True)
             loss = criterion(output, target_normed)
             prediction = normalizer.denorm(output.data.cpu())
@@ -206,28 +173,48 @@ def train_vlm(
                 )
         scheduler.step()
 
-    # Test the model
-
     net.eval()
-    f = open(os.path.join(output_path, "prediction_results_test_set.csv"), "w")
+    f = open(os.path.join(model_path, "crakn_prediction_results_test_set.csv"), "w")
     f.write("id,target,prediction\n")
     targets = []
     predictions = []
 
     with torch.no_grad():
-        for dat in test_loader:
-            test_bb_data = dat[0][0]
-            target = dat[-1]
+        neighbor_data = []
+        for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
+            bb_data, amds, latt, ids, target = dat
+            train_inputs = bb_data[0]
+            if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
+                train_inputs = [i.to(device) for i in train_inputs]
+            else:
+                train_inputs = train_inputs.to(device)
+            neighbor_node_features = vlm(train_inputs, return_embedding=True)[-1]
+            neighbor_data.append((neighbor_node_features, amds, latt, target))
+
+        for dat in tqdm(test_loader, desc="Predicting on test set.."):
+            bb_data, amds, latt, ids, target = dat
+            test_bb_data = bb_data[0]
             if isinstance(test_bb_data, list) or isinstance(test_bb_data, tuple):
                 test_bb_data = [i.to(device) for i in test_bb_data]
             else:
                 test_bb_data = [test_bb_data.to(device)]
 
-            out_data = net(test_bb_data, direct=True).cpu().reshape(-1)
-            target = target.cpu().numpy().flatten().tolist()
-
-            if len(target) == 1:
-                target = target[0]
+            if config.prediction_method == "ensemble":
+                out_data = []
+                for neighbor_datum in neighbor_data:
+                    nf = vlm(test_bb_data, return_embedding=True)[-1]
+                    temp_pred = net(
+                        ([nf.to(device)] + [i.to(device) for i in test_bb_data[1:]] + [torch.zeros(bb_data[1].shape).to(device)],
+                         amds.to(device),
+                         latt.to(device),
+                         ids),
+                        neighbors=(datum.to(device) for datum in neighbor_datum),
+                        direct=True
+                    )
+                    out_data.append(temp_pred[-len(ids):])
+                ensemble_predictions = torch.stack(out_data)
+                out_data = torch.mean(ensemble_predictions, dim=0)
+                target = target.cpu().numpy().flatten().tolist()
 
             pred = normalizer.denorm(out_data).data.numpy().flatten().tolist()
             targets.append(target)
@@ -251,11 +238,11 @@ def train_vlm(
                 f" {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")
 
         resultsfile = os.path.join(
-            output_path, "prediction_results_test_set.csv"
+            model_path, "crakn_prediction_results_test_set.csv"
         )
 
-        model_file = os.path.join(output_path,
-                                  f"model_{config.base_config.backbone}_{config.dataset}_{config.target}")
+        model_file = os.path.join(model_path,
+                                  f"model_crakn_{config.base_config.backbone}_{config.dataset}_{config.target}.csv")
 
         torch.save(net, model_file)
 
@@ -272,7 +259,7 @@ def train_vlm(
     return history
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import sys
 
     args = parser.parse_args(sys.argv[1:])
@@ -292,4 +279,4 @@ if __name__ == '__main__':
         except Exception as exp:
             print("Check", exp)
 
-    train_vlm(config)
+    train_crakn(args.model_path, config)

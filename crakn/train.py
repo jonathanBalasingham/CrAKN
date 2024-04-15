@@ -190,12 +190,11 @@ def train_crakn(
             optimizer, lambda epoch: 1.0
         )
     elif config.scheduler == "onecycle":
-        steps_per_epoch = len(train_loader)
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=config.learning_rate,
             epochs=config.epochs,
-            steps_per_epoch=steps_per_epoch,
+            steps_per_epoch=len(train_loader),
             pct_start=0.3,
         )
     elif config.scheduler == "step":

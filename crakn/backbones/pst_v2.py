@@ -182,9 +182,10 @@ class PeriodicSetTransformerV2(nn.Module):
         self.decoder = MLP(config.embedding_features, config.embedding_features,
                            config.decoder_layers, nn.Mish)
         self.out = nn.Linear(config.embedding_features, config.output_features)
+        self.final = nn.Linear(config.output_features, 1)
         print(f"Output of PSTv2 will have dimension: {config.output_features}")
 
-    def forward(self, features):
+    def forward(self, features, direct=True, return_embedding=False):
         str_fea, comp_fea, cloud_fea = features
         distribution = str_fea[:, :, 0, None]
         str_features = str_fea[:, :, 1:]
@@ -204,7 +205,12 @@ class PeriodicSetTransformerV2(nn.Module):
 
         x = torch.sum(distribution * (x + x_init), dim=1)
         x = self.decoder(self.ln(x))
-        return self.out(x)
+        x = self.out(x)
+        if direct and return_embedding:
+            return self.final(self.out(x)), x
+        if direct:
+            return self.final(x)
+        return x
 
 
 def preprocess_pdds(pdds_):

@@ -168,6 +168,7 @@ class Matformer(nn.Module):
             self.fc_out = nn.Linear(
                 config.fc_features, config.output_features
             )
+            self.final = nn.Linear(config.output_features, 1)
 
         self.link = None
         self.link_name = config.link
@@ -183,7 +184,7 @@ class Matformer(nn.Module):
         elif config.link == "logit":
             self.link = torch.sigmoid
 
-    def forward(self, data) -> torch.Tensor:
+    def forward(self, data, direct=False, return_embedding=False) -> torch.Tensor:
         data, ldata, lattice = data
         # initial node features: atom feature network...
 
@@ -199,14 +200,19 @@ class Matformer(nn.Module):
 
         # features = F.softplus(features)
         features = self.fc(features)
-
         out = self.fc_out(features)
+
+        if direct and return_embedding:
+            return self.final(out), out
+        if direct:
+            return self.final(out)
+
         if self.link:
             out = self.link(out)
         if self.classification:
             out = self.softmax(out)
 
-        return features
+        return out
 
 
 class MatformerConv(MessagePassing):

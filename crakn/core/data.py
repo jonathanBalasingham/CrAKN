@@ -173,7 +173,6 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
     val_sampler = SubsetRandomSampler(
         indices[-(valid_size + test_size):-test_size])
 
-    test_sampler = SequentialSampler(indices[-test_size:])
     collate_fn = partial(collate_crakn_data, internal_collate=dataset.data.collate_fn)
 
     train_loader = DataLoader(dataset, batch_size=config.batch_size,

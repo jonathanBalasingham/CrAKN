@@ -177,9 +177,10 @@ class PeriodicSetTransformer(nn.Module):
         self.activations = nn.ModuleList([nn.Mish()
                                           for _ in range(config.decoder_layers - 1)])
         self.out = nn.Linear(config.embedding_features, config.output_features)
+        self.final = nn.Linear(config.output_features, 1)
         print(f"Output of PST will have dimension: {config.output_features}")
 
-    def forward(self, features):
+    def forward(self, features, direct=False, return_embedding=False):
         str_fea, comp_fea = features
         weights = str_fea[:, :, 0, None]
         comp_features = self.af(comp_fea)
@@ -201,7 +202,13 @@ class PeriodicSetTransformer(nn.Module):
             x = layer(x)
             x = activation(x)
 
-        return self.out(x)
+        x = self.out(x)
+
+        if direct and return_embedding:
+            return self.final(x), x
+        if direct:
+            return self.final(x)
+        return x
 
 
 def preprocess_pdds(pdds_):

@@ -3,10 +3,12 @@ import json
 from pathlib import Path
 from typing import Union
 import matplotlib.pyplot as plt
+import numpy as np
 
 from pydantic_settings import BaseSettings as PydanticBaseSettings
 from pydantic import ConfigDict
 import torch
+from sklearn import metrics
 
 
 class BaseSettings(PydanticBaseSettings):
@@ -59,3 +61,80 @@ class Normalizer(object):
     def load_state_dict(self, state_dict):
         self.mean = state_dict['mean']
         self.std = state_dict['std']
+
+
+class SigmoidNormalizer(object):
+
+    def __init__(self, tensor) -> None:
+        self.min = torch.min(tensor)
+        self.max = torch.max(tensor)
+
+    def norm(self, tensor) -> torch.Tensor:
+        return (tensor - self.min) / (self.max - self.min)
+
+    def denorm(self, normed_tensor) -> torch.Tensor:
+        return ((self.max - self.min) * normed_tensor) + self.min
+
+    def state_dict(self):
+        return {'min': self.min,
+                'max': self.max}
+
+    def load_state_dict(self, state_dict):
+        self.min = state_dict['min']
+        self.max = state_dict['max']
+
+
+def mae(prediction, target):
+    return torch.mean(torch.abs(target - prediction))
+
+
+def mse(prediction, target):
+    return torch.mean((target - prediction) ** 2)
+
+
+def rmse(prediction, target):
+    return torch.sqrt(mse(prediction, target))
+
+
+def mape(prediction, target):
+    return torch.mean(torch.abs((target - prediction) / target))
+
+
+def mad(target):
+    return torch.mean(torch.abs(target - torch.mean(target)))
+
+
+def class_eval(prediction, target):
+    prediction = np.exp(prediction.numpy())
+    target = target.numpy()
+    pred_label = np.argmax(prediction, axis=1)
+    target_label = np.squeeze(target)
+    if not target_label.shape:
+        target_label = np.asarray([target_label])
+    if prediction.shape[1] == 2:
+        precision, recall, fscore, _ = metrics.precision_recall_fscore_support(
+            target_label, pred_label, average='binary')
+        auc_score = metrics.roc_auc_score(target_label, prediction[:, 1])
+        accuracy = metrics.accuracy_score(target_label, pred_label)
+    else:
+        raise NotImplementedError
+    return accuracy, precision, recall, fscore, auc_score
+
+
+class AverageMeter(object):
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+

@@ -158,14 +158,14 @@ class TrainingConfig(BaseSettings):
     epochs: int = 250
     batch_size: int = 32
     variable_batch_size: bool = False
-    test_batch_size: int = 1
+    test_batch_size: int = 3
     weight_decay: float = 1e-5
     learning_rate: float = 1e-4
     filename: str = "sample"
     warmup_steps: int = 2000
     criterion: Literal["mse", "l1", "poisson", "zig"] = "l1"
     optimizer: Literal["adamw", "sgd", "adam"] = "adamw"
-    scheduler: Literal["onecycle", "step", "none"] = "onecycle"
+    scheduler: Literal["onecycle", "step", "none"] = "step"
     pin_memory: bool = False
     save_dataloader: bool = False
     write_checkpoint: bool = True
@@ -184,8 +184,8 @@ class TrainingConfig(BaseSettings):
     distributed: bool = False
     data_parallel: bool = False
     n_early_stopping: Optional[int] = None  # typically 50
-    output_dir: str = os.path.abspath("temp")
-    lr_milestones: List[int] = [150, 200]
+    output_dir: str = os.path.abspath("../temp")
+    lr_milestones: List[int] = [150, 200, 400]
 
     # model configuration
     base_config: CrAKNConfig = CrAKNConfig(name="crakn")

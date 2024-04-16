@@ -103,6 +103,55 @@ class CrAKNDataset(torch.utils.data.Dataset):
                 self.ids[idx], torch.Tensor([self.targets[idx]]))
 
 
+
+def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    node_features = []
+    AMDs = []
+    lattices = []
+    targets = []
+    cids = []
+    with torch.no_grad():
+        for datum in loader:
+            bb_data, amds, latt, ids, target = datum
+            train_inputs = bb_data[0]
+            if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
+                train_inputs = [i.to(device) for i in train_inputs]
+            else:
+                train_inputs = train_inputs.to(device)
+            nf = vlm(train_inputs)
+            node_features.append(nf)
+            lattices.append(latt)
+            AMDs.append(amds)
+            targets.append(target)
+            cids.append(target)
+
+    node_features = torch.concat(node_features, dim=0)
+    AMDs = torch.concat(AMDs, dim=0)
+    lattices = torch.concat(lattices, dim=0)
+    targets = torch.concat(targets, dim=0)
+    cids = torch.concat(cids, dim=0)
+
+    return PretrainCrAKNDataset(node_features, AMDs, lattices, targets, cids)
+
+
+def convert_to_pretrain_dataset(vlm: torch.nn.Module,
+                                train_loader: torch.utils.data.DataLoader,
+                                val_loader: torch.utils.data.DataLoader,
+                                test_loader: torch.utils.data.DataLoader,
+                                config: TrainingConfig):
+    train_dataset = _convert(vlm, train_loader)
+    val_dataset = _convert(vlm, val_loader)
+    test_dataset = _convert(vlm, test_loader)
+
+    return (DataLoader(dataset, batch_size=config.batch_size,
+                              sampler=SubsetRandomSampler([i for i in range(len(dataset))]),
+                              num_workers=config.num_workers,
+                              collate_fn=collate_pretrain_crakn_data, pin_memory=config.pin_memory,
+                              shuffle=False) for dataset in [train_dataset, val_dataset, test_dataset])
+
+
+
 class PretrainCrAKNDataset(torch.utils.data.Dataset):
 
     def __init__(self, vlm_output, amds, lattices, targets, ids):
@@ -138,6 +187,27 @@ def collate_crakn_data(dataset_list, internal_collate=PSTData.collate_fn):
         ids.append(datum_id)
 
     return (internal_collate(backbone_data),
+            torch.stack(amds, dim=0),
+            torch.stack(lattices, dim=0),
+            ids,
+            torch.stack(targets, dim=0))
+
+
+def collate_pretrain_crakn_data(dataset_list):
+    node_features = []
+    lattices = []
+    amds = []
+    targets = []
+    ids = []
+
+    for nf, amd_fea, latt, datum_id, target in dataset_list:
+        node_features.append(nf)
+        amds.append(amd_fea)
+        lattices.append(latt)
+        targets.append(target)
+        ids.append(datum_id)
+
+    return (torch.stack(node_features, dim=0),
             torch.stack(amds, dim=0),
             torch.stack(lattices, dim=0),
             ids,

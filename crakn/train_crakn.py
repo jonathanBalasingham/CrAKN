@@ -17,7 +17,7 @@ from jarvis.db.jsonutils import loadjson
 import argparse
 import os
 
-from crakn.core.data import PretrainCrAKNDataset
+from crakn.core.data import PretrainCrAKNDataset, convert_to_pretrain_dataset
 from crakn.core.model import CrAKN
 from crakn.train import setup_optimizer
 from crakn.utils import mae, mse, rmse, Normalizer, AverageMeter
@@ -68,6 +68,8 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
 
     with open(dataloader_path, "rb") as f:
         train_loader, val_loader, test_loader = pickle.load(f)
+
+    train_loader, val_loader, test_loader = convert_to_pretrain_dataset(vlm, train_loader, val_loader, test_loader, config)
 
     with open(train_test_id_path, "r") as f:
         train_test_ids = json.load(f)
@@ -123,17 +125,6 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
     sample_targets = torch.concat([data[-1] for data in tqdm(train_loader, "Normalizing..")], dim=0)
     normalizer = Normalizer(sample_targets)
 
-    with torch.no_grad():
-        node_features = []
-        for dat in train_loader:
-            bb_data, amds, latt, ids, target = dat
-            train_inputs = bb_data[0]
-            if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
-                train_inputs = [i.to(device) for i in train_inputs]
-            else:
-                train_inputs = train_inputs.to(device)
-            node_features.append(vlm(train_inputs, return_embedding=True)[-1].cpu())
-
     # train the model!
     for epoch in range(config.epochs):
         batch_time = AverageMeter()
@@ -142,10 +133,10 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
         mae_errors = AverageMeter()
         end = time.time()
         net.train()
-        for step, (nf, dat) in enumerate(zip(node_features, train_loader)):
-            bb_data, amds, latt, ids, target = dat
+        for step, dat in enumerate(train_loader):
+            nf, amds, latt, ids, target = dat
             target_normed = normalizer.norm(target).to(device)
-            train_inputs = (nf.to(device), normalizer.norm(torch.Tensor(bb_data[-1])).to(device)), amds.to(device), latt.to(device), ids
+            train_inputs = (nf.to(device), target_normed), amds.to(device), latt.to(device), ids
 
             output = net(train_inputs, direct=True)
             loss = criterion(output, target_normed)
@@ -182,29 +173,17 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
     with torch.no_grad():
         neighbor_data = []
         for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
-            bb_data, amds, latt, ids, target = dat
-            train_inputs = bb_data[0]
-            if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
-                train_inputs = [i.to(device) for i in train_inputs]
-            else:
-                train_inputs = train_inputs.to(device)
-            neighbor_node_features = vlm(train_inputs, return_embedding=True)[-1]
-            neighbor_data.append((neighbor_node_features, amds, latt, target))
+            neighbor_node_features, amds, latt, ids, target = dat
+            neighbor_data.append((neighbor_node_features, amds, latt, normalizer.norm(target)))
 
         for dat in tqdm(test_loader, desc="Predicting on test set.."):
-            bb_data, amds, latt, ids, target = dat
-            test_bb_data = bb_data[0]
-            if isinstance(test_bb_data, list) or isinstance(test_bb_data, tuple):
-                test_bb_data = [i.to(device) for i in test_bb_data]
-            else:
-                test_bb_data = [test_bb_data.to(device)]
+            nf, amds, latt, ids, target = dat
 
             if config.prediction_method == "ensemble":
                 out_data = []
                 for neighbor_datum in neighbor_data:
-                    nf = vlm(test_bb_data, return_embedding=True)[-1]
                     temp_pred = net(
-                        ([nf.to(device)] + [i.to(device) for i in test_bb_data[1:]] + [torch.zeros(bb_data[1].shape).to(device)],
+                        ([nf.to(device), torch.zeros(target.shape).to(device)],
                          amds.to(device),
                          latt.to(device),
                          ids),

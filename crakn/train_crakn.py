@@ -1,6 +1,7 @@
 import json
 import pickle
 import pprint
+import random
 import time
 from functools import reduce
 from typing import Union, Dict
@@ -135,6 +136,14 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
         net.train()
         for step, dat in enumerate(train_loader):
             nf, amds, latt, ids, target = dat
+            samples = random.randint(2, config.batch_size)
+            if config.variable_batch_size:
+                nf = nf[:samples]
+                amds = amds[:samples]
+                latt = latt[:samples]
+                ids = ids[:samples]
+                target = target[:samples]
+
             target_normed = normalizer.norm(target).to(device)
             train_inputs = (nf.to(device), target_normed), amds.to(device), latt.to(device), ids
 

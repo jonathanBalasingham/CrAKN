@@ -116,13 +116,6 @@ def train_vlm(
 
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
-    prepare_batch = partial(prepare_crakn_batch, device=device,
-                            internal_prepare_batch=train_loader.dataset.data.prepare_batch,
-                            variable=config.variable_batch_size)
-
-    prepare_batch_test = partial(prepare_crakn_batch, device=device,
-                                 internal_prepare_batch=train_loader.dataset.data.prepare_batch,
-                                 variable=False)
     if classification:
         config.base_config.classification = True
 

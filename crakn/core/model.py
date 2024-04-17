@@ -264,8 +264,10 @@ class CrAKNEncoder(nn.Module):
         q = self.q_ln(q + self.activation(self.q_out(proj_q)))
         k = self.k_ln(k + self.activation(self.k_out(proj_k)))
 
-        return q, k, torch.mean(values, dim=-1, keepdim=True), self.bias_out(bias)
-
+        if bias is not None:
+            return q, k, torch.mean(values, dim=-1, keepdim=True), self.bias_out(bias)
+        else:
+            return q, k, torch.mean(values, dim=-1, keepdim=True), bias
 
 class CrAKN(nn.Module):
     def __init__(self, config: CrAKNConfig):
@@ -344,8 +346,9 @@ class CrAKN(nn.Module):
         for layer in self.layers:
             #predictions, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
             #                                bias=bias, embed_bias=self.embed_bias, mask=mask)
-            q, k, predictions, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
+            q, k, predictions_updated, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
                                             bias=bias, mask=mask)
+            predictions = (predictions_updated + predictions) / 2
 
         return predictions
 

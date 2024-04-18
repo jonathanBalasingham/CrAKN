@@ -88,7 +88,6 @@ class CrAKNDataset(torch.utils.data.Dataset):
         periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in
                          tqdm(structures, desc="Creating Periodic Sets..")]
         mat2vec = pd.read_csv(Path(__file__).parent.parent / "data" / "mat2vec.csv").to_numpy()[:, 1:].astype(np.float64)
-        print(mat2vec)
         comp = np.vstack([np.mean(mat2vec[ps.types - 1], axis=0) for ps in periodic_sets])
         amds = np.vstack([amd.AMD(ps, k=config.base_config.amd_k)
                                for ps in tqdm(periodic_sets, desc="Calculating AMDs..")])

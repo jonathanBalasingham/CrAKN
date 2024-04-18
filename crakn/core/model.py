@@ -64,8 +64,8 @@ class CrAKNVectorAttention(nn.Module):
             embedding_dim,
             attention_dropout=0.0,
             qkv_bias=True,
-            use_multiplier=False,
-            use_bias=False,
+            use_multiplier=True,
+            use_bias=True,
             activation=nn.Mish
     ):
         super(CrAKNVectorAttention, self).__init__()
@@ -118,6 +118,8 @@ class CrAKNVectorAttention(nn.Module):
             self.linear_v(feat),
         )
         relation_qk = key.unsqueeze(-2) - query.unsqueeze(-1)
+        if pos is not None:
+            pos = pos.unsqueeze(-2) - pos.unsqueeze(-1)
         if self.delta_mul:
             pem = self.linear_p_multiplier(pos)
             relation_qk = relation_qk * pem
@@ -235,6 +237,8 @@ class CrAKN(nn.Module):
         self.backbone = get_backbone(config.backbone, bb_config=config.backbone_config)
         # self.layers = [CrAKNLayer(config.embedding_dim) for _ in range(config.layers)]
         self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim)
+        atom_feature_size = 200 if config.backbone_config.atom_features == "mat2vec" else 92
+        self.edge_embedding = nn.Linear(config.amd_k + atom_feature_size, config.embedding_dim)
         self.expansion = RBFExpansion(0, config.cutoff, config.expansion_size)
         self.layers = nn.ModuleList(
             [CrAKNEncoder(config.embedding_dim, config.embedding_dim, 1,
@@ -301,13 +305,14 @@ class CrAKN(nn.Module):
         if self.attention_bias:
             bias = torch.cdist(target_edge_features, edge_features).unsqueeze(-1)
             bias = self.expansion(bias).squeeze()
+            edge_features = self.edge_embedding(edge_features)
         else:
             bias = None
 
         for layer, node_update in zip(self.layers, self.node_updates):
             q, k, predictions_updated, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
                                                     bias=bias, mask=mask)
-            k = node_update(k)
+            k = node_update(k, pos=edge_features)
             q = k[-q.shape[0]:]
             predictions = (predictions_updated + predictions) / 2
 

@@ -128,7 +128,7 @@ class CrAKNVectorAttention(nn.Module):
             relation_qk = relation_qk + peb
 
         weight = self.weight_encoding(relation_qk)
-        weight = self.attn_drop(F.softmax(weight, dim=-1))
+        weight = self.attn_drop(F.softmax(weight, dim=-2))
 
         feat = torch.einsum("i j k, i k -> i k", weight, value)
         return feat

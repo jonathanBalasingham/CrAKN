@@ -58,119 +58,78 @@ def expand_mask(mask):
     return mask
 
 
-class CrAKNAttention(nn.Module):
+class CrAKNVectorAttention(nn.Module):
+    def __init__(
+            self,
+            embedding_dim,
+            attention_dropout=0.0,
+            qkv_bias=True,
+            use_multiplier=False,
+            use_bias=False,
+            activation=nn.Mish
+    ):
+        super(CrAKNVectorAttention, self).__init__()
+        self.embed_channels = embedding_dim
+        self.attn_drop_rate = attention_dropout
+        self.qkv_bias = qkv_bias
+        self.delta_mul = use_multiplier
+        self.delta_bias = use_bias
 
-    def __init__(self, qdim, kdim, vdim, num_heads, head_dim, dropout=0, embed_value=False, bias_dim=40):
-        super().__init__()
-        self.qdim = qdim
-        self.kdim = kdim
-        self.vdim = vdim
-        self.bias_dim = bias_dim
-        self.num_heads = num_heads
-        self.head_dim = head_dim
-        self.dropout = nn.Dropout(dropout)
-        self.norm = nn.LayerNorm(num_heads * head_dim)
-        self.q_proj = nn.Linear(qdim, head_dim * num_heads)
-        self.k_proj = nn.Linear(kdim, head_dim * num_heads)
-        self.v_proj = nn.Linear(vdim, head_dim * num_heads)
-        self.bias_proj = nn.Linear(bias_dim, num_heads * bias_dim)
-        self.distance_embedding = nn.Linear(1, num_heads)
+        self.linear_q = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim, bias=qkv_bias),
+            nn.LayerNorm(embedding_dim),
+            activation(inplace=True),
+        )
+        self.linear_k = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim, bias=qkv_bias),
+            nn.LayerNorm(embedding_dim),
+            activation(inplace=True),
+        )
 
-        self.embed_value = embed_value
-        if self.embed_value:
-            self.o_proj = nn.Sequential(nn.Linear(head_dim * num_heads, head_dim * num_heads),
-                                        nn.Mish(), nn.Linear(head_dim * num_heads, vdim))
-        else:
-            self.o_proj = nn.Linear(num_heads * vdim, vdim)
+        self.linear_v = nn.Linear(embedding_dim, embedding_dim, bias=qkv_bias)
 
-        self.bias_out = nn.Sequential(nn.Linear(bias_dim * num_heads, bias_dim),
-                                      nn.Mish())
-        self._reset_parameters()
+        if self.delta_mul:
+            self.linear_p_multiplier = nn.Sequential(
+                nn.Linear(embedding_dim, embedding_dim),
+                nn.LayerNorm(embedding_dim),
+                activation(inplace=True),
+                nn.Linear(embedding_dim, embedding_dim),
+            )
+        if self.delta_bias:
+            self.linear_p_bias = nn.Sequential(
+                nn.Linear(embedding_dim, embedding_dim),
+                nn.LayerNorm(embedding_dim),
+                activation(inplace=True),
+                nn.Linear(embedding_dim, embedding_dim),
+            )
+        self.weight_encoding = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim),
+            nn.LayerNorm(embedding_dim),
+            activation(inplace=True),
+            nn.Linear(embedding_dim, embedding_dim),
+        )
+        self.softmax = nn.Softmax(dim=2)
+        self.attn_drop = nn.Dropout(attention_dropout)
 
-    def _reset_linear_parameters(self, mod):
-        if isinstance(mod, nn.Linear):
-            nn.init.xavier_uniform_(mod.weight)
-            mod.bias.data.fill_(0)
+    def forward(self, feat, pos=None):
+        query, key, value = (
+            self.linear_q(feat),
+            self.linear_k(feat),
+            self.linear_v(feat),
+        )
+        relation_qk = key.unsqueeze(-2) - query.unsqueeze(-1)
+        if self.delta_mul:
+            pem = self.linear_p_multiplier(pos)
+            relation_qk = relation_qk * pem
+        if self.delta_bias:
+            peb = self.linear_p_bias(pos)
+            relation_qk = relation_qk + peb
 
-    def _reset_parameters(self):
-        #  From original torch implementation
-        nn.init.xavier_uniform_(self.q_proj.weight)
-        nn.init.xavier_uniform_(self.k_proj.weight)
-        nn.init.xavier_uniform_(self.v_proj.weight)
-        self.q_proj.bias.data.fill_(0)
-        self.k_proj.bias.data.fill_(0)
-        self.v_proj.bias.data.fill_(0)
-        self.o_proj.apply(self._reset_linear_parameters)
+        weight = self.weight_encoding(relation_qk)
+        weight = self.attn_drop(F.softmax(weight, dim=-1))
 
-    def scaled_dot_product(self, q, k, v, mask=None, bias=None):
-        """
-        k and v must have the same seq length
-        """
-        d_k = q.size()[-1]
-        attn_logits = torch.matmul(q, k.transpose(-2, -1))
-        attn_logits = attn_logits / math.sqrt(d_k)
-
-        if bias is not None:
-            attn_logits += bias
-
-        if mask is not None:
-            attn_logits = attn_logits.masked_fill(mask == 0, -9e15)
-
-        attention = F.softmax(attn_logits, dim=-1)
-        values = torch.matmul(attention, v)
-        return values, attention
-
-    def forward(self, q, k, v, mask=None, bias=None, embed_bias=True):
-        embed_bias = embed_bias if bias is not None else False
-
-        if mask is not None:
-            mask = mask.unsqueeze(0)
-
-        q = self.q_proj(q).reshape(q.shape[0], self.num_heads, -1)
-        k = self.k_proj(k).reshape(k.shape[0], self.num_heads, -1)
-        if self.embed_value:
-            v = self.v_proj(v)
-        else:
-            v = v.unsqueeze(1).expand(-1, self.num_heads, -1)
-
-        v = v.reshape(v.shape[0], self.num_heads, -1)
-
-        if bias is not None:
-            if embed_bias:
-                bias = self.bias_proj(bias)
-                diffs = bias.reshape(self.num_heads, bias.shape[0], bias.shape[1], self.bias_dim)
-                diffs = torch.norm(diffs, dim=-1)
-            else:
-                diffs = self.distance_embedding(bias.unsqueeze(-1)).reshape(self.num_heads, bias.shape[0],
-                                                                            bias.shape[-1])
-        else:
-            diffs = None
-
-        q = q.permute(1, 0, 2)
-        k = k.permute(1, 0, 2)
-        v = v.permute(1, 0, 2)
-
-        values, attention = self.scaled_dot_product(q, k, v, mask=mask, bias=diffs)
-        values = values.permute(1, 0, 2)
-
-        if not self.embed_value:
-            values = values.reshape(-1, self.num_heads * self.vdim)
-            values = self.o_proj(values)
-            if not embed_bias:
-                return values, bias
-            # return values, self.bias_out(bias)
-            return values, self.bias_out(bias)
-
-        values = values.reshape(-1, self.num_heads * self.head_dim)
-        values = self.dropout(values)
-
-        if bias is None:
-            return self.o_proj(values), None
-        else:
-            if not embed_bias:
-                return self.o_proj(values), bias
-            # return self.o_proj(values), self.bias_out(bias)
-            return self.o_proj(values), bias
+        feat = torch.einsum("i j k, i k -> i k", weight, value)
+        return feat
 
 
 class CrAKNEncoder(nn.Module):
@@ -269,18 +228,20 @@ class CrAKNEncoder(nn.Module):
         else:
             return q, k, torch.mean(values, dim=-1, keepdim=True), bias
 
+
 class CrAKN(nn.Module):
     def __init__(self, config: CrAKNConfig):
         super().__init__()
         self.backbone = get_backbone(config.backbone, bb_config=config.backbone_config)
         # self.layers = [CrAKNLayer(config.embedding_dim) for _ in range(config.layers)]
-        self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim )
+        self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim)
         self.expansion = RBFExpansion(0, config.cutoff, config.expansion_size)
         self.layers = nn.ModuleList(
             [CrAKNEncoder(config.embedding_dim, config.embedding_dim, 1,
                           config.num_heads, config.head_dim, dropout=config.dropout,
                           embed_value=False, bias_dim=config.expansion_size)
              for _ in range(config.layers)])
+        self.node_updates = [CrAKNVectorAttention(config.embedding_dim) for _ in range(config.layers)]
 
         self.ln1 = nn.LayerNorm(config.embedding_dim)
         self.ln2 = nn.LayerNorm(config.embedding_dim)
@@ -343,11 +304,11 @@ class CrAKN(nn.Module):
         else:
             bias = None
 
-        for layer in self.layers:
-            #predictions, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
-            #                                bias=bias, embed_bias=self.embed_bias, mask=mask)
+        for layer, node_update in zip(self.layers, self.node_updates):
             q, k, predictions_updated, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
-                                            bias=bias, mask=mask)
+                                                    bias=bias, mask=mask)
+            k = node_update(k)
+            q = k[-q.shape[0]:]
             predictions = (predictions_updated + predictions) / 2
 
         return predictions
@@ -370,7 +331,7 @@ if __name__ == '__main__':
     amds_target = torch.zeros(2, amd_k)
     amds_neighbors = torch.zeros(6, amd_k)
     bias = torch.cdist(amds_target, torch.concat([amds_neighbors, amds_target], dim=0))
-    att = CrAKNAttention(q.shape[1], k.shape[1], v.shape[1], num_heads, head_dim)
+    att = CrAKNEncoder(q.shape[1], k.shape[1], v.shape[1], num_heads, head_dim)
     master_k = torch.concat([k, q], dim=0)
     master_v = torch.concat([v, initial_predictions], dim=0)
     mask = torch.concat([torch.ones(q.shape[0], k.shape[0]), torch.eye(q.shape[0])], dim=1)
@@ -385,7 +346,7 @@ if __name__ == '__main__':
     amds_neighbors = torch.zeros(k.shape[0], amd_k)
     amds = torch.concat([amds_neighbors, amds_target], dim=0)
     bias = torch.cdist(amds_target, amds)
-    att = CrAKNAttention(q.shape[1], k.shape[1], v.shape[1], num_heads, head_dim)
+    att = CrAKNEncoder(q.shape[1], k.shape[1], v.shape[1], num_heads, head_dim)
     master_k = torch.concat([k, q], dim=0)
     master_v = torch.concat([v, initial_predictions], dim=0)
     mask = torch.concat([-torch.eye(q.shape[0], k.shape[0]) + 1, torch.eye(q.shape[0])], dim=1)

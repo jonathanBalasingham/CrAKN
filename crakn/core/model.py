@@ -241,7 +241,7 @@ class CrAKN(nn.Module):
                           config.num_heads, config.head_dim, dropout=config.dropout,
                           embed_value=False, bias_dim=config.expansion_size)
              for _ in range(config.layers)])
-        self.node_updates = [CrAKNVectorAttention(config.embedding_dim) for _ in range(config.layers)]
+        self.node_updates = nn.ModuleList([CrAKNVectorAttention(config.embedding_dim) for _ in range(config.layers)])
 
         self.ln1 = nn.LayerNorm(config.embedding_dim)
         self.ln2 = nn.LayerNorm(config.embedding_dim)

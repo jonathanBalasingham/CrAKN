@@ -34,6 +34,7 @@ class PSTConfig(BaseSettings):
     k: int = 15
     collapse_tol: float = 1e-4
     atom_features: str = "mat2vec"
+    outputs: int = 1
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
@@ -177,8 +178,7 @@ class PeriodicSetTransformer(nn.Module):
         self.activations = nn.ModuleList([nn.Mish()
                                           for _ in range(config.decoder_layers - 1)])
         self.out = nn.Linear(config.embedding_features, config.output_features)
-        self.final = nn.Linear(config.output_features, 1)
-        print(f"Output of PST will have dimension: {config.output_features}")
+        self.final = nn.Linear(config.output_features, config.outputs)
 
     def forward(self, features, direct=False, return_embedding=False):
         str_fea, comp_fea = features
@@ -250,7 +250,7 @@ class PSTData(torch.utils.data.Dataset):
         cif_id, target = self.id_prop_data[idx], self.id_prop_data[idx]
         return torch.Tensor(self.pdds[idx]), \
             torch.Tensor(self.atom_fea[idx]), \
-            torch.Tensor([float(target)]), \
+            torch.Tensor(target), \
             cif_id
 
     @staticmethod

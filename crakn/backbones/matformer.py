@@ -73,7 +73,7 @@ class MatformerConfig(BaseSettings):
     use_canonize: bool = False
     use_lattice: bool = False
     compute_line_graph: bool = False
-
+    outputs: int = 1
     class Config:
         """Configure model settings behavior."""
 

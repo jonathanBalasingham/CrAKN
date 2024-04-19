@@ -1,5 +1,6 @@
 import random
-from functools import partial
+from functools import partial, reduce
+from math import nan
 from pathlib import Path
 
 import amd
@@ -31,22 +32,30 @@ DATA_FORMATS = {
 }
 
 
-def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[float], List]:
+def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[List[float]], List]:
     if config.dataset == "matbench":
         pass
     else:
         d = data(config.dataset)
 
     structures: List[Structure] = []
-    targets: List[float] = []
+    targets: List[List[float]] = []
     ids = []
     current_id = 0
     for datum in tqdm(d, desc="Retrieving data.."):
-        if config.target not in datum.keys():
-            raise ValueError(f"Unknown target {config.target}")
+        for t in config.target:
+            if t not in datum.keys():
+                raise ValueError(f"Unknown target {config.target}")
 
-        target = datum[config.target]
-        if not isinstance(target, float):
+        target = []
+        for property_name in config.target:
+            val = datum[property_name]
+            if isinstance(val, float):
+                target.append(val)
+            else:
+                target.append(nan)
+
+        if np.all(np.isnan(target)):
             continue
 
         if config.id_tag in datum:
@@ -87,10 +96,11 @@ class CrAKNDataset(torch.utils.data.Dataset):
             structures = [s.pymatgen_converter() for s in structures]
         periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in
                          tqdm(structures, desc="Creating Periodic Sets..")]
-        mat2vec = pd.read_csv(Path(__file__).parent.parent / "data" / "mat2vec.csv").to_numpy()[:, 1:].astype(np.float64)
+        mat2vec = pd.read_csv(Path(__file__).parent.parent / "data" / "mat2vec.csv").to_numpy()[:, 1:].astype(
+            np.float64)
         comp = np.vstack([np.mean(mat2vec[ps.types - 1], axis=0) for ps in periodic_sets])
         amds = np.vstack([amd.AMD(ps, k=config.base_config.amd_k)
-                               for ps in tqdm(periodic_sets, desc="Calculating AMDs..")])
+                          for ps in tqdm(periodic_sets, desc="Calculating AMDs..")])
         self.amds = np.concatenate([comp, amds], axis=1)
         self.lattices = np.array([list(s.lattice.parameters)
                                   for s in tqdm(structures, desc="Retrieving lattices..")])
@@ -104,11 +114,10 @@ class CrAKNDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         """Get StructureDataset sample."""
         return (self.data[idx], torch.Tensor(self.amds[idx]), torch.Tensor(self.lattices[idx]),
-                self.ids[idx], torch.Tensor([self.targets[idx]]))
+                self.ids[idx], torch.Tensor(self.targets[idx]))
 
 
-
-def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader):
+def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_index):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     node_features = []
     AMDs = []
@@ -118,23 +127,34 @@ def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader):
     with torch.no_grad():
         for datum in loader:
             bb_data, amds, latt, ids, target = datum
+            inds = np.where(np.logical_not(np.isnan(target[:, target_index])))[0]
+            if inds.shape == target.shape[0]:
+                continue
+
+            amds = amds[inds]
+            latt = latt[inds]
+            ids = [ids[i] for i in inds]
+            target = target[inds]
             train_inputs = bb_data[0]
+
             if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
                 train_inputs = [i.to(device) for i in train_inputs]
             else:
                 train_inputs = train_inputs.to(device)
+
             nf = vlm(train_inputs)
+            nf = nf[inds]
             node_features.append(nf)
             lattices.append(latt)
             AMDs.append(amds)
-            targets.append(target)
-            cids.append(target)
+            targets.append(target[:, target_index])
+            cids.append(ids)
 
     node_features = torch.concat(node_features, dim=0)
     AMDs = torch.concat(AMDs, dim=0)
     lattices = torch.concat(lattices, dim=0)
     targets = torch.concat(targets, dim=0)
-    cids = torch.concat(cids, dim=0)
+    cids = reduce(lambda x, y: x + y, cids)
 
     return PretrainCrAKNDataset(node_features, AMDs, lattices, targets, cids)
 
@@ -144,16 +164,15 @@ def convert_to_pretrain_dataset(vlm: torch.nn.Module,
                                 val_loader: torch.utils.data.DataLoader,
                                 test_loader: torch.utils.data.DataLoader,
                                 config: TrainingConfig):
-    train_dataset = _convert(vlm, train_loader)
-    val_dataset = _convert(vlm, val_loader)
-    test_dataset = _convert(vlm, test_loader)
+    train_dataset = _convert(vlm, train_loader, target_index=config.mo_target_index)
+    val_dataset = _convert(vlm, val_loader, target_index=config.mo_target_index)
+    test_dataset = _convert(vlm, test_loader, target_index=config.mo_target_index)
 
     return (DataLoader(dataset, batch_size=config.batch_size,
-                              sampler=SubsetRandomSampler([i for i in range(len(dataset))]),
-                              num_workers=config.num_workers,
-                              collate_fn=collate_pretrain_crakn_data, pin_memory=config.pin_memory,
-                              shuffle=False) for dataset in [train_dataset, val_dataset, test_dataset])
-
+                       sampler=SubsetRandomSampler([i for i in range(len(dataset))]),
+                       num_workers=config.num_workers,
+                       collate_fn=collate_pretrain_crakn_data, pin_memory=config.pin_memory,
+                       shuffle=False) for dataset in [train_dataset, val_dataset, test_dataset])
 
 
 class PretrainCrAKNDataset(torch.utils.data.Dataset):

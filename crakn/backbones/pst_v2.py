@@ -32,6 +32,7 @@ class PSTv2Config(BaseSettings):
     k: int = 15
     collapse_tol: float = 1e-4
     atom_features: str = "mat2vec"
+    outputs: int = 1
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
@@ -182,8 +183,7 @@ class PeriodicSetTransformerV2(nn.Module):
         self.decoder = MLP(config.embedding_features, config.embedding_features,
                            config.decoder_layers, nn.Mish)
         self.out = nn.Linear(config.embedding_features, config.output_features)
-        self.final = nn.Linear(config.output_features, 1)
-        print(f"Output of PSTv2 will have dimension: {config.output_features}")
+        self.final = nn.Linear(config.output_features, config.outputs)
 
     def forward(self, features, direct=True, return_embedding=False):
         str_fea, comp_fea, cloud_fea = features
@@ -257,7 +257,7 @@ class PSTv2Data(torch.utils.data.Dataset):
         return torch.Tensor(self.pdds[idx]), \
             torch.Tensor(self.atom_fea[idx]), \
             torch.Tensor(self.clouds[idx]), \
-            torch.Tensor([float(target)]), \
+            torch.Tensor(target), \
             cif_id
 
     @staticmethod

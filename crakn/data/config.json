@@ -1,11 +1,11 @@
 {
     "version": "fff37bc52e9d2ee1ebb1809fba54a190ae68a6b6",
-    "dataset": "dft_3d_2021",
-    "target": "exfoliation_energy",
+    "dataset": "dft_2d",
+    "target": ["formation_energy_peratom"],
     "atom_features": "mat2vec",
     "neighbor_strategy": "k-nearest",
     "id_tag": "jid",
-    "prediction_method": "single",
+    "prediction_method": "ensemble",
     "n_ensemble": 10,
     "random_seed": 123,
     "classification_threshold": null,
@@ -16,7 +16,7 @@
     "val_ratio": 0.01,
     "test_ratio": 0.1,
     "target_multiplication_factor": null,
-    "epochs": 2000,
+    "epochs": 500,
     "batch_size": 32,
     "test_batch_size": 32,
     "variable_batch_size": false,
@@ -62,7 +62,8 @@
             "expansion_size": 10,
             "k": 15,
             "collapse_tol": 0.0001,
-            "atom_encoding": "mat2vec"
+            "atom_features": "mat2vec",
+            "outputs": 1
         },
         "embedding_dim": 128,
         "layers": 4,

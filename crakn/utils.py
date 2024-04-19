@@ -17,7 +17,7 @@ class BaseSettings(PydanticBaseSettings):
 
 
 def plot_learning_curve(
-    results_dir: Union[str, Path], key: str = "mae", plot_train: bool = False
+        results_dir: Union[str, Path], key: str = "mae", plot_train: bool = False
 ):
     """Plot learning curves based on json history files."""
     if isinstance(results_dir, str):
@@ -42,11 +42,23 @@ def plot_learning_curve(
     return train, val
 
 
+def nanvar(tensor, dim=None, keepdim=False):
+    tensor_mean = tensor.nanmean(dim=dim, keepdim=True)
+    output = (tensor - tensor_mean).square().nanmean(dim=dim, keepdim=keepdim)
+    return output
+
+
+def nanstd(tensor, dim=None, keepdim=False):
+    output = nanvar(tensor, dim=dim, keepdim=keepdim)
+    output = output.sqrt()
+    return output
+
+
 class Normalizer(object):
 
     def __init__(self, tensor):
-        self.mean = torch.mean(tensor)
-        self.std = torch.std(tensor)
+        self.mean = torch.nanmean(tensor, dim=0)
+        self.std = nanstd(tensor, dim=0)
 
     def norm(self, tensor):
         return (tensor - self.mean) / self.std
@@ -85,11 +97,11 @@ class SigmoidNormalizer(object):
 
 
 def mae(prediction, target):
-    return torch.mean(torch.abs(target - prediction))
+    return torch.nanmean(torch.abs(target - prediction))
 
 
 def mse(prediction, target):
-    return torch.mean((target - prediction) ** 2)
+    return torch.nanmean((target - prediction) ** 2)
 
 
 def rmse(prediction, target):
@@ -97,11 +109,11 @@ def rmse(prediction, target):
 
 
 def mape(prediction, target):
-    return torch.mean(torch.abs((target - prediction) / target))
+    return torch.nanmean(torch.abs((target - prediction) / target))
 
 
 def mad(target):
-    return torch.mean(torch.abs(target - torch.mean(target)))
+    return torch.nanmean(torch.abs(target - torch.mean(target)))
 
 
 def class_eval(prediction, target):
@@ -137,5 +149,3 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-
-

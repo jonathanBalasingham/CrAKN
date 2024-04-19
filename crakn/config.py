@@ -134,7 +134,7 @@ class TrainingConfig(BaseSettings):
         "dft_2d",
         "matbench"
     ] = "dft_3d_2021"
-    target: TARGET_ENUM = "exfoliation_energy"
+    target: List[TARGET_ENUM] = ["exfoliation_energy"]
     atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "mat2vec"
     neighbor_strategy: Literal[
         "k-nearest", "ddg"
@@ -186,7 +186,7 @@ class TrainingConfig(BaseSettings):
     n_early_stopping: Optional[int] = None  # typically 50
     output_dir: str = os.path.abspath("../temp")
     lr_milestones: List[int] = [150, 200, 400]
-
+    mo_target_index: int = 0
     # model configuration
     base_config: CrAKNConfig = CrAKNConfig(name="crakn")
 

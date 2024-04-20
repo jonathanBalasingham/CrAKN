@@ -201,7 +201,7 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
                     )
                     out_data.append(temp_pred[-len(ids):])
                 ensemble_predictions = torch.stack(out_data)
-                out_data = torch.mean(ensemble_predictions, dim=0)
+                out_data = torch.mean(ensemble_predictions, dim=0).cpu()
                 target = target.cpu().numpy().flatten().tolist()
 
             pred = normalizer.denorm(out_data).data.numpy().flatten().tolist()

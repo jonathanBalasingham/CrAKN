@@ -180,7 +180,7 @@ class PeriodicSetTransformer(nn.Module):
         self.out = nn.Linear(config.embedding_features, config.output_features)
         self.final = nn.Linear(config.output_features, config.outputs)
 
-    def forward(self, features, direct=False, return_embedding=False):
+    def forward(self, features, output_level: Literal["atom", "crystal", "property"] = "crystal"):
         str_fea, comp_fea = features
         weights = str_fea[:, :, 0, None]
         comp_features = self.af(comp_fea)
@@ -195,7 +195,13 @@ class PeriodicSetTransformer(nn.Module):
         for encoder in self.encoders:
             x = encoder(x, weights)
 
+        if output_level == "atom":
+            return torch.concatenate([weights, x], dim=-1)
+
         x = torch.sum(weights * (x + x_init), dim=1)
+
+        if output_level == "crystal":
+            return x
 
         x = self.ln2(x)
         for layer, activation in zip(self.decoder, self.activations):
@@ -203,12 +209,7 @@ class PeriodicSetTransformer(nn.Module):
             x = activation(x)
 
         x = self.out(x)
-
-        if direct and return_embedding:
-            return self.final(x), x
-        if direct:
-            return self.final(x)
-        return x
+        return self.final(x)
 
 
 def preprocess_pdds(pdds_):

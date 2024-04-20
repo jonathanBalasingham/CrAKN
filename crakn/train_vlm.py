@@ -171,7 +171,7 @@ def train_vlm(
             else:
                 train_inputs = train_inputs.to(device)
             target_normed = normalizer.norm(target).to(device)
-            output = net(train_inputs, direct=True)
+            output = net(train_inputs, output_level="property")
             loss = torch.zeros(1).to(device)
 
             for i, prop in enumerate(config.target):
@@ -228,7 +228,7 @@ def train_vlm(
             else:
                 test_bb_data = [test_bb_data.to(device)]
 
-            out_data = net(test_bb_data, direct=True).cpu()
+            out_data = net(test_bb_data, output_level="property").cpu()
             target = target.cpu().numpy().tolist()
 
             pred = normalizer.denorm(out_data).data.numpy().tolist()

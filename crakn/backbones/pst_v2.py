@@ -41,7 +41,8 @@ class MLP(nn.Module):
     def __init__(self, input_dim: int, embedding_dim: int, layers: int, activation):
         super().__init__()
         self.embedding = nn.Linear(input_dim, embedding_dim)
-        self.net = nn.ModuleList([nn.Sequential(nn.Linear(embedding_dim, embedding_dim), activation()) for _ in range(layers - 1)])
+        self.net = nn.ModuleList(
+            [nn.Sequential(nn.Linear(embedding_dim, embedding_dim), activation()) for _ in range(layers - 1)])
 
     def forward(self, x):
         x = self.embedding(x)
@@ -62,13 +63,13 @@ def weighted_softmax(x, dim=-1, weights=None):
 
 class VectorAttention(nn.Module):
     def __init__(
-        self,
-        embed_channels,
-        attention_dropout=0.0,
-        qkv_bias=True,
-        use_multiplier=False,
-        use_bias=False,
-        activation=nn.Mish
+            self,
+            embed_channels,
+            attention_dropout=0.0,
+            qkv_bias=True,
+            use_multiplier=False,
+            use_bias=False,
+            activation=nn.Mish
     ):
         super(VectorAttention, self).__init__()
         self.embed_channels = embed_channels
@@ -185,7 +186,7 @@ class PeriodicSetTransformerV2(nn.Module):
         self.out = nn.Linear(config.embedding_features, config.output_features)
         self.final = nn.Linear(config.output_features, config.outputs)
 
-    def forward(self, features, direct=True, return_embedding=False):
+    def forward(self, features, output_level: Literal["atom", "crystal", "property"] = "crystal"):
         str_fea, comp_fea, cloud_fea = features
         distribution = str_fea[:, :, 0, None]
         str_features = str_fea[:, :, 1:]
@@ -203,14 +204,17 @@ class PeriodicSetTransformerV2(nn.Module):
         for encoder in self.encoders:
             x = encoder(x, distribution, pos)
 
+        if output_level == "atom":
+            return torch.concatenate([distribution, x], dim=-1)
+
         x = torch.sum(distribution * (x + x_init), dim=1)
+
+        if output_level == "crystal":
+            return x
+
         x = self.decoder(self.ln(x))
         x = self.out(x)
-        if direct and return_embedding:
-            return self.final(self.out(x)), x
-        if direct:
-            return self.final(x)
-        return x
+        return self.final(x)
 
 
 def preprocess_pdds(pdds_):
@@ -233,11 +237,11 @@ class PSTv2Data(torch.utils.data.Dataset):
         atom_fea = []
         clouds = []
         for ind in tqdm(range(len(periodic_sets)),
-                      desc="Creating PDDs…",
-                      ascii=False, ncols=75):
+                        desc="Creating PDDs…",
+                        ascii=False, ncols=75):
             ps = periodic_sets[ind]
             pdd, groups, inds, cloud = custom_PDD(ps, k=self.k, collapse=True, collapse_tol=self.collapse_tol,
-                                              constrained=True, lexsort=False)
+                                                  constrained=True, lexsort=False)
             indices_in_graph = [i[0] for i in groups]
             atom_features = ps.types[indices_in_graph][:, None]
             atom_fea.append(atom_features)
@@ -302,6 +306,7 @@ class PSTv2Data(torch.utils.data.Dataset):
 if __name__ == '__main__':
     from crakn.core.data import retrieve_data
     from crakn.config import TrainingConfig
+
     config = TrainingConfig()
     structures, targets, ids = retrieve_data(config)
     pst_dataset = PSTv2Data(structures, targets, config.backbone)

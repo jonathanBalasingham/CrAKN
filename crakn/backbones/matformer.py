@@ -184,7 +184,7 @@ class Matformer(nn.Module):
         elif config.link == "logit":
             self.link = torch.sigmoid
 
-    def forward(self, data, direct=False, return_embedding=False) -> torch.Tensor:
+    def forward(self, data, output_level: Literal["atom", "crystal", "property"] = "crystal") -> torch.Tensor:
         data, ldata, lattice = data
         # initial node features: atom feature network...
 
@@ -195,6 +195,8 @@ class Matformer(nn.Module):
         for attn_layer in self.att_layers:
             node_features = attn_layer(node_features, data.edge_index, edge_features)
 
+        if output_level == "atom":
+            return node_features
         # crystal-level readout
         features = scatter(node_features, data.batch, dim=0, reduce="mean")
 
@@ -202,17 +204,15 @@ class Matformer(nn.Module):
         features = self.fc(features)
         out = self.fc_out(features)
 
-        if direct and return_embedding:
-            return self.final(out), out
-        if direct:
-            return self.final(out)
+        if output_level == "crystal":
+            return out
 
         if self.link:
             out = self.link(out)
         if self.classification:
             out = self.softmax(out)
 
-        return out
+        return self.final(out)
 
 
 class MatformerConv(MessagePassing):

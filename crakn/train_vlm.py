@@ -177,7 +177,7 @@ def train_vlm(
             for i, prop in enumerate(config.target):
                 inds = torch.where(torch.logical_not(torch.isnan(target[:, i])))[0]
                 loss += criterion(output[inds, i], target_normed[inds, i])
-            #loss = criterion(output, target_normed)
+
             prediction = normalizer.denorm(output.data.cpu())
 
             prop_mae_errors, prop_mse_errors, prop_rmse_errors = [], [], []

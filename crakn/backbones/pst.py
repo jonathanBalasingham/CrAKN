@@ -223,10 +223,11 @@ def preprocess_pdds(pdds_):
 
 
 class PSTData(torch.utils.data.Dataset):
-    def __init__(self, structures, targets, config: PSTConfig):
+    def __init__(self, structures, targets, ids, config: PSTConfig):
         self.k = int(config.k)
         self.collapse_tol = float(config.collapse_tol)
         self.id_prop_data = targets
+        self.ids = ids
         pdds = []
         periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in structures]
         atom_fea = []
@@ -248,7 +249,7 @@ class PSTData(torch.utils.data.Dataset):
         return len(self.id_prop_data)
 
     def __getitem__(self, idx):
-        cif_id, target = self.id_prop_data[idx], self.id_prop_data[idx]
+        cif_id, target = self.ids[idx], self.id_prop_data[idx]
         return torch.Tensor(self.pdds[idx]), \
             torch.Tensor(self.atom_fea[idx]), \
             torch.Tensor(target), \

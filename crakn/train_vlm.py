@@ -66,7 +66,7 @@ def train_vlm(
     if type(config) is dict:
         config = TrainingConfig(**config)
 
-    output_directory = f"{config.base_config.backbone}_{config.dataset}_{config.target}"
+    output_directory = f"{config.base_config.backbone}_{config.dataset}_{'_'.join(config.target)}"
     output_path = os.path.join(config.output_dir, output_directory)
     if not os.path.exists(config.output_dir):
         os.makedirs(config.output_dir)
@@ -218,10 +218,12 @@ def train_vlm(
     f.write("id,target,prediction\n")
     targets = []
     predictions = []
+    ids = []
 
     with torch.no_grad():
         for dat in test_loader:
             test_bb_data = dat[0][0]
+            cid = dat[-2]
             target = dat[-1]
             if isinstance(test_bb_data, list) or isinstance(test_bb_data, tuple):
                 test_bb_data = [i.to(device) for i in test_bb_data]
@@ -234,14 +236,12 @@ def train_vlm(
             pred = normalizer.denorm(out_data).data.numpy().tolist()
             targets.append(target)
             predictions.append(pred)
+            ids.append(cid)
         f.close()
 
         targets = reduce(lambda x, y: x + y, targets)
         predictions = reduce(lambda x, y: x + y, predictions)
-        #targets = np.vstack(targets)
-        #predictions = np.vstack(predictions)
-        print(np.array(targets).shape)
-        print(np.array(predictions).shape)
+        ids = reduce(lambda x, y: x + y, ids)
 
         def mad(target):
             return np.nanmean(np.abs(target - np.nanmean(target)))
@@ -265,6 +265,8 @@ def train_vlm(
             output_path, "prediction_results_test_set.csv"
         )
 
+        print(f"Results written to {output_path}")
+
         model_file = os.path.join(output_path,
                                   f"model_{config.base_config.backbone}_{config.dataset}_{config.target}")
 
@@ -274,9 +276,9 @@ def train_vlm(
         predictions = np.array(predictions, dtype="float").flatten()
 
         with open(resultsfile, "w") as f:
-            print("target,prediction", file=f)
-            for target_val, predicted_val in zip(target_vals, predictions):
-                print(f"{target_val}, {predicted_val}", file=f)
+            print("id,target,prediction", file=f)
+            for cid, target_val, predicted_val in zip(ids, target_vals, predictions):
+                print(f"{cid}, {target_val}, {predicted_val}", file=f)
 
     if return_predictions:
         return history, predictions

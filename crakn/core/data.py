@@ -73,15 +73,15 @@ def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[List[fl
     return structures, targets, ids
 
 
-def get_dataset(structures, targets, config):
+def get_dataset(structures, targets, ids, config):
     if config.name == "PST":
-        return PSTData(structures, targets, config)
+        return PSTData(structures, targets, ids, config)
     elif config.name == "PSTv2":
-        return PSTv2Data(structures, targets, config)
+        return PSTv2Data(structures, targets, ids, config)
     elif config.name == "SimpleGCN":
-        return GCNData(structures, targets, config)
+        return GCNData(structures, targets, ids, config)
     elif config.name == "Matformer":
-        return MatformerData(structures, targets, config)
+        return MatformerData(structures, targets, ids, config)
     else:
         raise NotImplementedError(f"Not implemented yet, {config.name}")
 
@@ -90,7 +90,7 @@ class CrAKNDataset(torch.utils.data.Dataset):
 
     def __init__(self, structures, targets, ids, config: TrainingConfig):
         super().__init__()
-        self.data = get_dataset(structures, targets, config.base_config.backbone_config)
+        self.data = get_dataset(structures, targets, ids, config.base_config.backbone_config)
 
         if isinstance(structures[0], jarvis.core.atoms.Atoms):
             structures = [s.pymatgen_converter() for s in structures]

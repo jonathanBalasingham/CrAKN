@@ -367,6 +367,7 @@ class MatformerData(torch.utils.data.Dataset):
             self,
             structures,
             targets,
+            ids,
             config: MatformerConfig = MatformerConfig(name="Matformer")
     ):
         """Pytorch Dataset for atomistic graphs.
@@ -387,6 +388,7 @@ class MatformerData(torch.utils.data.Dataset):
                                                compute_line_graph=False) for s in tqdm(structures)]
         self.graphs = graphs
         self.target = targets
+        self.ids = ids
         self.line_graph = config.line_graph
 
         self.labels = torch.tensor(targets).type(

@@ -90,10 +90,11 @@ class SimpleGCN(nn.Module):
 
 class GCNData(torch.utils.data.Dataset):
 
-    def __init__(self, structures, targets, config: SimpleGCNConfig):
+    def __init__(self, structures, targets, ids, config: SimpleGCNConfig):
         self.atom_input_features = config.atom_input_features
         self.edge_lengthscale = config.edge_lengthscale
         self.id_prop_data = targets
+        self.cif_ids = ids
         self.graphs = [ddg(structure, max_neighbors=config.max_neighbors, backward_edges=config.backward_edges) for
                        structure in structures]
 
@@ -101,7 +102,7 @@ class GCNData(torch.utils.data.Dataset):
         return len(self.id_prop_data)
 
     def __getitem__(self, idx):
-        cif_id, target = self.id_prop_data[idx], self.id_prop_data[idx]
+        cif_id, target = self.cif_ids[idx], self.id_prop_data[idx]
         return self.graphs[idx], torch.Tensor([float(target)])
 
     @staticmethod

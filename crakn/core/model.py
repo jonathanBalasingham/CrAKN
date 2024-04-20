@@ -64,8 +64,8 @@ class CrAKNVectorAttention(nn.Module):
             embedding_dim,
             attention_dropout=0.0,
             qkv_bias=True,
-            use_multiplier=True,
-            use_bias=True,
+            use_multiplier=False,
+            use_bias=False,
             activation=nn.Mish
     ):
         super(CrAKNVectorAttention, self).__init__()
@@ -312,7 +312,7 @@ class CrAKN(nn.Module):
         for layer, node_update in zip(self.layers, self.node_updates):
             q, k, predictions_updated, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
                                                     bias=bias, mask=mask)
-            k = node_update(k, pos=edge_features)
+            k = node_update(k, pos=None)
             q = k[-q.shape[0]:]
             predictions = (predictions_updated + predictions) / 2
 

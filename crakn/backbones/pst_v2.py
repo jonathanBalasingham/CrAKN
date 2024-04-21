@@ -208,12 +208,11 @@ class PeriodicSetTransformerV2(nn.Module):
             return torch.concatenate([distribution, x], dim=-1)
 
         x = torch.sum(distribution * (x + x_init), dim=1)
-
+        x = self.decoder(self.ln(x))
+        x = self.out(x)
         if output_level == "crystal":
             return x
 
-        x = self.decoder(self.ln(x))
-        x = self.out(x)
         return self.final(x)
 
 

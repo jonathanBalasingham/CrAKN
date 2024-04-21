@@ -188,7 +188,9 @@ def train_vlm(
 
             for i, _ in enumerate(config.target):
                 inds = torch.where(torch.logical_not(torch.isnan(target[:, i])))[0]
-                mae_errors[i].update(prop_mae_errors[i].cpu().item(), target[inds, i].size(0))
+                error_update_size = target[inds, i].size(0)
+                if error_update_size > 0:
+                    mae_errors[i].update(prop_mae_errors[i].cpu().item(), error_update_size)
             losses.update(loss.cpu().item(), target.size(0))
 
             optimizer.zero_grad()

@@ -200,15 +200,15 @@ class PeriodicSetTransformer(nn.Module):
 
         x = torch.sum(weights * (x + x_init), dim=1)
 
-        if output_level == "crystal":
-            return x
-
         x = self.ln2(x)
         for layer, activation in zip(self.decoder, self.activations):
             x = layer(x)
             x = activation(x)
 
         x = self.out(x)
+        if output_level == "crystal":
+            return x
+
         return self.final(x)
 
 

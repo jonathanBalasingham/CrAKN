@@ -302,40 +302,44 @@ class CrAKN(nn.Module):
             num_heads=1
         )
 
-        self.struct_pna = dgl.nn.PNAConv(
+        self.struct_pna = nn.ModuleList([dgl.nn.PNAConv(
             emb_dim,
             emb_dim,
             ['mean', 'max', 'sum'],
             ['identity', 'amplification'],
             2.5,
             edge_feat_size=emb_dim
-        )
-        self.comp_pna = dgl.nn.PNAConv(
+        ) for _ in range(config.layers)])
+
+        self.comp_pna = nn.ModuleList([dgl.nn.PNAConv(
             emb_dim,
             emb_dim,
             ['mean', 'max', 'sum'],
             ['identity', 'amplification'],
             2.5,
             edge_feat_size=emb_dim
-        )
+        ) for _ in range(config.layers)])
 
-        self.struct_gmm = dgl.nn.pytorch.conv.EGATConv(
+        self.struct_egat = nn.ModuleList([dgl.nn.pytorch.conv.EGATConv(
             in_node_feats=emb_dim,
             in_edge_feats=emb_dim,
             out_node_feats=emb_dim,
             out_edge_feats=emb_dim,
             num_heads=1
-        )
-        self.comp_gmm = dgl.nn.pytorch.conv.EGATConv(
+        ) for _ in range(config.layers)])
+
+        self.comp_egat = nn.ModuleList([dgl.nn.pytorch.conv.EGATConv(
             in_node_feats=emb_dim,
             in_edge_feats=emb_dim,
             out_node_feats=emb_dim,
             out_edge_feats=emb_dim,
             num_heads=1
+        ) for _ in range(config.layers)])
+
+        self.bn = nn.ModuleList(
+            [nn.BatchNorm1d(emb_dim) for _ in range(config.layers)]
         )
 
-        self.bn = nn.BatchNorm1d(emb_dim)
-        self.bn2 = nn.BatchNorm1d(emb_dim)
         self.out = nn.Linear(emb_dim, config.output_features)
 
     def transformer_forward(self, inputs, neighbors=None, direct=False) -> torch.Tensor:
@@ -403,13 +407,11 @@ class CrAKN(nn.Module):
         comp_edge_features = self.diff_comp_embedding(g.edata["comp"])
         struct_edge_features = self.diff_struct_embedding(g.edata["struct"])
 
-        #node_features = self.comp_pna(g, node_features, edge_feat=comp_edge_features)
-        nshape = node_features.shape
-        node_features, comp_edge_features = self.comp_gmm(g, node_features, comp_edge_features)
-        node_features = self.bn(node_features.reshape(nshape))
-        #node_features = self.struct_pna(g, node_features, edge_feat=struct_edge_features)
-        node_features, struct_edge_features = self.struct_gmm(g, node_features, struct_edge_features)
-        node_features = self.bn2(node_features.reshape(nshape))
+        for c, s, bn in zip(self.comp_pna, self.struct_pna, self.bn):
+            node_features = c(g, node_features, edge_feat=comp_edge_features)
+            node_features = s(g, node_features, edge_feat=struct_edge_features)
+            #node_features = bn(node_features)
+
         return self.out(node_features)[original_ids]
 
     def forward(self, inputs):

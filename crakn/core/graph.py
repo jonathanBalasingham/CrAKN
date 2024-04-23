@@ -162,7 +162,7 @@ class CrAKNGraphDataset(torch.utils.data.Dataset):
     def collate_fn(self, samples):
         graphs, original_ids, target_ids, cids, targets = map(list, zip(*samples))
         #batched_graph = dgl.batch(graphs)
-        batched_graph, original_ids = self.graph.khop_out_subgraph(target_ids, k=1, relabel_nodes=True)
+        batched_graph, original_ids = self.graph.khop_out_subgraph(target_ids, k=2, relabel_nodes=True)
         return (batched_graph,
                 original_ids,
                 torch.IntTensor(target_ids),

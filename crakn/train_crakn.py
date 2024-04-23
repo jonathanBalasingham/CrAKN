@@ -219,7 +219,7 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
                 g, original_ids, node_ids, ids, target = dat
                 out_data = net((g.to(device), original_ids.to(device), node_ids.to(device)))
                 target = target.cpu().numpy().flatten().tolist()
-                pred = normalizer.denorm(out_data).data.numpy().flatten().tolist()
+                pred = normalizer.denorm(out_data.cpu()).data.numpy().flatten().tolist()
                 targets.append(target)
                 predictions.append(pred)
 

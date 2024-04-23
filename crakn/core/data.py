@@ -144,9 +144,10 @@ def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_i
             else:
                 train_inputs = train_inputs.to(device)
 
-            nf = vlm(train_inputs)
-            base_preds = vlm(train_inputs, output_level="property")
-            nf = torch.hstack([nf[inds], base_preds[inds]])
+            with torch.no_grad():
+                nf = vlm(train_inputs)
+                base_preds = vlm(train_inputs, output_level="property")
+                nf = torch.hstack([nf[inds], base_preds[inds]]).cpu()
             node_features.append(nf)
             lattices.append(latt)
             AMDs.append(amds)

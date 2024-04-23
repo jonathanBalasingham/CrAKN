@@ -187,6 +187,7 @@ class TrainingConfig(BaseSettings):
     output_dir: str = os.path.abspath("../temp")
     lr_milestones: List[int] = [150, 200, 400]
     mo_target_index: int = 0
+    extra_features: List[TARGET_ENUM] = ["formation_energy_peratom", "exfoliation_energy"]
     # model configuration
     base_config: CrAKNConfig = CrAKNConfig(name="crakn")
 

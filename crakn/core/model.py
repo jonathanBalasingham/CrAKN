@@ -20,6 +20,7 @@ from random import randrange
 class CrAKNConfig(BaseSettings):
     name: Literal["crakn"]
     backbone: Literal["PST", "SimpleGCN", "Matformer", "PSTv2"] = "PST"
+    mtype: Literal["Transformer", "GNN"] = "GNN"
     backbone_config: Union[PSTConfig, SimpleGCNConfig, MatformerConfig, PSTv2Config] = PSTConfig(name="PST")
     embedding_dim: int = 64
     layers: int = 4
@@ -235,6 +236,7 @@ class CrAKN(nn.Module):
     def __init__(self, config: CrAKNConfig):
         super().__init__()
         self.backbone = get_backbone(config.backbone, bb_config=config.backbone_config)
+        self.model_type = config.mtype
         # self.layers = [CrAKNLayer(config.embedding_dim) for _ in range(config.layers)]
         self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim)
         atom_feature_size = 200 if config.backbone_config.atom_features == "mat2vec" else 92
@@ -262,7 +264,81 @@ class CrAKN(nn.Module):
         self.crakn_out = nn.Sequential(nn.Linear(config.num_heads * config.embedding_dim, config.embedding_dim),
                                        nn.Mish(), nn.Linear(config.embedding_dim, 1))
 
-    def forward(self, inputs, neighbors=None, direct=False) -> torch.Tensor:
+        emb_dim = config.embedding_dim
+        self.embedding = nn.Linear(
+            config.backbone_config.output_features + config.backbone_config.outputs,
+            emb_dim
+        )
+
+        self.diff_struct_embedding = nn.Sequential(
+            nn.Linear(config.amd_k, emb_dim),
+            nn.Mish()
+        )
+
+        self.diff_comp_embedding = nn.Sequential(
+            nn.Linear(atom_feature_size, emb_dim),
+            nn.Mish()
+        )
+
+        self.struct_conv_lin = nn.Sequential(
+            nn.Linear(emb_dim, emb_dim),
+            nn.Mish()
+        )
+
+        self.comp_conv_lin = nn.Sequential(
+            nn.Linear(emb_dim, emb_dim),
+            nn.Mish()
+        )
+
+        self.struct_conv = dgl.nn.GATv2Conv(
+            emb_dim,
+            emb_dim,
+            num_heads=1,
+        )
+
+        self.comp_conv = dgl.nn.GATv2Conv(
+            emb_dim,
+            emb_dim,
+            num_heads=1
+        )
+
+        self.struct_pna = dgl.nn.PNAConv(
+            emb_dim,
+            emb_dim,
+            ['mean', 'max', 'sum'],
+            ['identity', 'amplification'],
+            2.5,
+            edge_feat_size=emb_dim
+        )
+        self.comp_pna = dgl.nn.PNAConv(
+            emb_dim,
+            emb_dim,
+            ['mean', 'max', 'sum'],
+            ['identity', 'amplification'],
+            2.5,
+            edge_feat_size=emb_dim
+        )
+
+        self.struct_gmm = dgl.nn.pytorch.conv.EGATConv(
+            in_node_feats=emb_dim,
+            in_edge_feats=emb_dim,
+            out_node_feats=emb_dim,
+            out_edge_feats=emb_dim,
+            num_heads=1
+        )
+        self.comp_gmm = dgl.nn.pytorch.conv.EGATConv(
+            in_node_feats=emb_dim,
+            in_edge_feats=emb_dim,
+            out_node_feats=emb_dim,
+            out_edge_feats=emb_dim,
+            num_heads=1
+        )
+
+        self.bn = nn.BatchNorm1d(emb_dim)
+        self.bn2 = nn.BatchNorm1d(emb_dim)
+        self.out = nn.Linear(emb_dim, config.output_features)
+
+    def transformer_forward(self, inputs, neighbors=None, direct=False) -> torch.Tensor:
         backbone_input, target_edge_features, latt, _ = inputs
 
         if direct:
@@ -317,6 +393,32 @@ class CrAKN(nn.Module):
             predictions = (predictions_updated + predictions) / 2
 
         return predictions
+
+    def graph_forward(self, inputs):
+        g, original_ids, target_ids = inputs
+        g.local_var()
+        node_features = g.ndata["node_features"]
+        node_features = self.embedding(node_features)
+
+        comp_edge_features = self.diff_comp_embedding(g.edata["comp"])
+        struct_edge_features = self.diff_struct_embedding(g.edata["struct"])
+
+        #node_features = self.comp_pna(g, node_features, edge_feat=comp_edge_features)
+        nshape = node_features.shape
+        node_features, comp_edge_features = self.comp_gmm(g, node_features, comp_edge_features)
+        node_features = self.bn(node_features.reshape(nshape))
+        #node_features = self.struct_pna(g, node_features, edge_feat=struct_edge_features)
+        node_features, struct_edge_features = self.struct_gmm(g, node_features, struct_edge_features)
+        node_features = self.bn2(node_features.reshape(nshape))
+        return self.out(node_features)[original_ids]
+
+    def forward(self, inputs):
+        if self.model_type == "Transformer":
+            return self.transformer_forward(inputs)
+        elif self.model_type == "GNN":
+            return self.graph_forward(inputs)
+        else:
+            raise NotImplementedError(f"Model Type: {self.model_type} not implemented")
 
 
 if __name__ == '__main__':

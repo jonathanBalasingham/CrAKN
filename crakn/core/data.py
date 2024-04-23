@@ -24,6 +24,8 @@ import pandas as pd
 # from matbench.bench import MatbenchBenchmark
 import torch
 
+from crakn.core.graph import knowledge_graph
+
 DATA_FORMATS = {
     "PST": "pymatgen",
     "Matformer": "jarvis",
@@ -117,7 +119,7 @@ class CrAKNDataset(torch.utils.data.Dataset):
                 self.ids[idx], torch.Tensor(self.targets[idx]))
 
 
-def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_index):
+def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_index, original_data=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     node_features = []
     AMDs = []
@@ -143,7 +145,8 @@ def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_i
                 train_inputs = train_inputs.to(device)
 
             nf = vlm(train_inputs)
-            nf = nf[inds]
+            base_preds = vlm(train_inputs, output_level="property")
+            nf = torch.hstack([nf[inds], base_preds[inds]])
             node_features.append(nf)
             lattices.append(latt)
             AMDs.append(amds)
@@ -164,9 +167,13 @@ def convert_to_pretrain_dataset(vlm: torch.nn.Module,
                                 val_loader: torch.utils.data.DataLoader,
                                 test_loader: torch.utils.data.DataLoader,
                                 config: TrainingConfig):
-    train_dataset = _convert(vlm, train_loader, target_index=config.mo_target_index)
-    val_dataset = _convert(vlm, val_loader, target_index=config.mo_target_index)
-    test_dataset = _convert(vlm, test_loader, target_index=config.mo_target_index)
+    d = retrieve_data(config)
+    train_dataset = _convert(vlm, train_loader, target_index=config.mo_target_index, original_data=d)
+    val_dataset = _convert(vlm, val_loader, target_index=config.mo_target_index, original_data=d)
+    test_dataset = _convert(vlm, test_loader, target_index=config.mo_target_index, original_data=d)
+
+    if config.base_config.mtype == "GNN":
+        return knowledge_graph(train_dataset, val_dataset, test_dataset, config)
 
     return (DataLoader(dataset, batch_size=config.batch_size,
                        sampler=SubsetRandomSampler([i for i in range(len(dataset))]),

@@ -135,20 +135,26 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
         end = time.time()
         net.train()
         for step, dat in enumerate(train_loader):
-            nf, amds, latt, ids, target = dat
-            samples = random.randint(2, config.batch_size)
-            if config.variable_batch_size:
-                nf = nf[:samples]
-                amds = amds[:samples]
-                latt = latt[:samples]
-                ids = ids[:samples]
-                target = target[:samples]
+            if config.base_config.mtype == "Transformer":
+                nf, amds, latt, ids, target = dat
+                samples = random.randint(2, config.batch_size)
+                if config.variable_batch_size:
+                    nf = nf[:samples]
+                    amds = amds[:samples]
+                    latt = latt[:samples]
+                    ids = ids[:samples]
+                    target = target[:samples]
 
-            target_normed = normalizer.norm(target).to(device)
-            train_inputs = (nf.to(device), target_normed), amds.to(device), latt.to(device), ids
+                target_normed = normalizer.norm(target).to(device)
+                train_inputs = (nf.to(device), target_normed), amds.to(device), latt.to(device), ids
+                output = net(train_inputs, direct=True)
+                loss = criterion(output, target_normed)
+            else:
+                g, original_ids, node_ids, ids, target = dat
+                target_normed = normalizer.norm(target).to(device)
+                output = net((g.to(device), original_ids.to(device), node_ids.to(device)))
+                loss = criterion(output, target_normed)
 
-            output = net(train_inputs, direct=True)
-            loss = criterion(output, target_normed)
             prediction = normalizer.denorm(output.data.cpu())
             mae_error, mse_error, rmse_error = mae(prediction, target), mse(prediction, target), rmse(prediction,
                                                                                                       target)
@@ -180,33 +186,43 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
     predictions = []
 
     with torch.no_grad():
-        neighbor_data = []
-        for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
-            neighbor_node_features, amds, latt, ids, target = dat
-            neighbor_data.append((neighbor_node_features, amds, latt, normalizer.norm(target)))
 
-        for dat in tqdm(test_loader, desc="Predicting on test set.."):
-            nf, amds, latt, ids, target = dat
+        if config.base_config.mtype == "Transformer":
+            neighbor_data = []
+            for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
+                neighbor_node_features, amds, latt, ids, target = dat
+                neighbor_data.append((neighbor_node_features, amds, latt, normalizer.norm(target)))
 
-            if config.prediction_method == "ensemble":
-                out_data = []
-                for neighbor_datum in neighbor_data:
-                    temp_pred = net(
-                        ([nf.to(device), torch.zeros(target.shape).to(device)],
-                         amds.to(device),
-                         latt.to(device),
-                         ids),
-                        neighbors=(datum.to(device) for datum in neighbor_datum),
-                        direct=True
-                    )
-                    out_data.append(temp_pred[-len(ids):])
-                ensemble_predictions = torch.stack(out_data)
-                out_data = torch.mean(ensemble_predictions, dim=0).cpu()
+            for dat in tqdm(test_loader, desc="Predicting on test set.."):
+                nf, amds, latt, ids, target = dat
+
+                if config.prediction_method == "ensemble":
+                    out_data = []
+                    for neighbor_datum in neighbor_data:
+                        temp_pred = net(
+                            ([nf.to(device), torch.zeros(target.shape).to(device)],
+                             amds.to(device),
+                             latt.to(device),
+                             ids),
+                            neighbors=(datum.to(device) for datum in neighbor_datum),
+                            direct=True
+                        )
+                        out_data.append(temp_pred[-len(ids):])
+                    ensemble_predictions = torch.stack(out_data)
+                    out_data = torch.mean(ensemble_predictions, dim=0).cpu()
+                    target = target.cpu().numpy().flatten().tolist()
+                    pred = normalizer.denorm(out_data).data.numpy().flatten().tolist()
+                    targets.append(target)
+                    predictions.append(pred)
+        else:
+            for dat in tqdm(test_loader, desc="Predicting on test set.."):
+                g, original_ids, node_ids, ids, target = dat
+                out_data = net((g.to(device), original_ids.to(device), node_ids.to(device)))
                 target = target.cpu().numpy().flatten().tolist()
+                pred = normalizer.denorm(out_data).data.numpy().flatten().tolist()
+                targets.append(target)
+                predictions.append(pred)
 
-            pred = normalizer.denorm(out_data).data.numpy().flatten().tolist()
-            targets.append(target)
-            predictions.append(pred)
         f.close()
 
         targets = reduce(lambda x, y: x + y, targets)

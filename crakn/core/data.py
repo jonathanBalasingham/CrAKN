@@ -126,6 +126,7 @@ def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_i
     lattices = []
     targets = []
     cids = []
+    preds = []
     with torch.no_grad():
         for datum in loader:
             bb_data, amds, latt, ids, target = datum
@@ -147,20 +148,24 @@ def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_i
             with torch.no_grad():
                 nf = vlm(train_inputs)
                 base_preds = vlm(train_inputs, output_level="property")
-                nf = torch.hstack([nf[inds], base_preds[inds]]).cpu()
+                nf = nf.cpu()
+                base_preds = base_preds.cpu()
+
             node_features.append(nf)
+            preds.append(base_preds)
             lattices.append(latt)
             AMDs.append(amds)
             targets.append(target[:, target_index])
             cids.append(ids)
 
     node_features = torch.concat(node_features, dim=0)
+    base_preds = torch.concat(preds, dim=0)
     AMDs = torch.concat(AMDs, dim=0)
     lattices = torch.concat(lattices, dim=0)
     targets = torch.concat(targets, dim=0)
     cids = reduce(lambda x, y: x + y, cids)
 
-    return PretrainCrAKNDataset(node_features, AMDs, lattices, targets, cids)
+    return PretrainCrAKNDataset(node_features, AMDs, lattices, targets, cids, base_preds)
 
 
 def convert_to_pretrain_dataset(vlm: torch.nn.Module,
@@ -185,13 +190,14 @@ def convert_to_pretrain_dataset(vlm: torch.nn.Module,
 
 class PretrainCrAKNDataset(torch.utils.data.Dataset):
 
-    def __init__(self, vlm_output, amds, lattices, targets, ids):
+    def __init__(self, vlm_output, amds, lattices, targets, ids, base_preds):
         super().__init__()
         self.data = vlm_output
         self.amds = amds
         self.lattices = lattices
         self.targets = targets
         self.ids = ids
+        self.base_preds = base_preds
 
     def __len__(self):
         """Get length."""

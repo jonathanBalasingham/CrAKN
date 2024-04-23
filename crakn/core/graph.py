@@ -115,13 +115,24 @@ def knowledge_graph(train_dataset, val_dataset, test_dataset, config: TrainingCo
 
     ids = train_dataset.ids + val_dataset.ids + test_dataset.ids
     print(df)
-    df = df[df['jid'].isin(ids)][[i for i in config.extra_features if i != config.target[config.mo_target_index]]].to_numpy()
+    df = df[df['jid'].isin(ids)][config.target].to_numpy()
+    df[-len(test_dataset.ids):, config.mo_target_index] = 0
     df[df == 'na'] = 0
     df = df.astype(np.float64)
     print(f"Extra features: {df.shape}")
 
-    g.ndata['extra_features'] = torch.Tensor(df)
+    ef = torch.Tensor(df)
 
+    base_predictions = torch.Tensor(
+        np.vstack([
+            train_dataset.base_preds,
+            val_dataset.base_preds,
+            test_dataset.base_preds
+        ])
+    )
+
+    ef[ef == 0] = base_predictions[ef == 0]
+    g.ndata["extra_features"] = ef
 
     indices = [i for i in range(targets.shape[0])]
     train_indices = indices[:len(train_dataset)]

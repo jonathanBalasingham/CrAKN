@@ -267,7 +267,7 @@ class CrAKN(nn.Module):
 
         emb_dim = config.embedding_dim
         self.embedding = nn.Linear(
-            config.backbone_config.output_features + config.backbone_config.outputs,
+            config.backbone_config.output_features,
             emb_dim
         )
 
@@ -351,7 +351,7 @@ class CrAKN(nn.Module):
             emb_dim,
         ) for _ in range(config.layers)])
 
-        self.ef_embedding = nn.Linear(config.extra_features, emb_dim)
+        self.ef_embedding = nn.Linear(config.backbone_config.outputs, emb_dim)
 
         self.bn = nn.ModuleList(
             [nn.BatchNorm1d(emb_dim) for _ in range(config.layers)]

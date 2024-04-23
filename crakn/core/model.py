@@ -29,6 +29,7 @@ class CrAKNConfig(BaseSettings):
     dropout: float = 0
     output_features: int = 1
     amd_k: int = 100
+    extra_features: int = 4
     classification: bool = False
     backbone_only: bool = False
     attention_bias: bool = True
@@ -336,6 +337,22 @@ class CrAKN(nn.Module):
             num_heads=1
         ) for _ in range(config.layers)])
 
+        self.struct_egnn = nn.ModuleList([dgl.nn.pytorch.conv.EGNNConv(
+            emb_dim,
+            emb_dim,
+            emb_dim,
+            emb_dim,
+        ) for _ in range(config.layers)])
+
+        self.comp_egnn = nn.ModuleList([dgl.nn.pytorch.conv.EGNNConv(
+            emb_dim,
+            emb_dim,
+            emb_dim,
+            emb_dim,
+        ) for _ in range(config.layers)])
+
+        self.ef_embedding = nn.Linear(config.extra_features, emb_dim)
+
         self.bn = nn.ModuleList(
             [nn.BatchNorm1d(emb_dim) for _ in range(config.layers)]
         )
@@ -403,14 +420,17 @@ class CrAKN(nn.Module):
         g.local_var()
         node_features = g.ndata["node_features"]
         node_features = self.embedding(node_features)
+        ef = self.ef_embedding(g.ndata["extra_features"])
 
         comp_edge_features = self.diff_comp_embedding(g.edata["comp"])
         struct_edge_features = self.diff_struct_embedding(g.edata["struct"])
 
-        for c, s, bn in zip(self.comp_pna, self.struct_pna, self.bn):
-            node_features = c(g, node_features, edge_feat=comp_edge_features)
-            node_features = s(g, node_features, edge_feat=struct_edge_features)
+        for c, s, bn in zip(self.comp_egnn, self.struct_egnn, self.bn):
+            #node_features = c(g, node_features, edge_feat=comp_edge_features)
+            #node_features = s(g, node_features, edge_feat=struct_edge_features)
             #node_features = bn(node_features)
+            ef, node_features = c(g, ef, node_features, comp_edge_features)
+            ef, node_features = s(g, ef, node_features, struct_edge_features)
 
         return self.out(node_features)[original_ids]
 

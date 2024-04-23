@@ -2,6 +2,7 @@ from typing import List
 
 import dgl
 import amd
+import pandas as pd
 import torch
 from torch import nn
 from torch.utils.data import SubsetRandomSampler, DataLoader, SequentialSampler, Sampler
@@ -56,7 +57,8 @@ def nearest_neighbors_to_edge_list(neighbors):
     return edge_list
 
 
-def knowledge_graph(train_dataset, val_dataset, test_dataset, config: TrainingConfig) -> dgl.graph:
+def knowledge_graph(train_dataset, val_dataset, test_dataset, config: TrainingConfig, d) -> dgl.graph:
+    df = pd.DataFrame(d)
     num_nodes = len(train_dataset) + len(val_dataset) + len(test_dataset)
     g = dgl.graph(data=[])
     g.add_nodes(num_nodes)
@@ -112,6 +114,14 @@ def knowledge_graph(train_dataset, val_dataset, test_dataset, config: TrainingCo
     )
 
     ids = train_dataset.ids + val_dataset.ids + test_dataset.ids
+    print(df)
+    df = df[df['jid'].isin(ids)][[i for i in config.extra_features if i != config.target[config.mo_target_index]]].to_numpy()
+    df[df == 'na'] = 0
+    df = df.astype(np.float64)
+    print(f"Extra features: {df.shape}")
+
+    g.ndata['extra_features'] = torch.Tensor(df)
+
 
     indices = [i for i in range(targets.shape[0])]
     train_indices = indices[:len(train_dataset)]

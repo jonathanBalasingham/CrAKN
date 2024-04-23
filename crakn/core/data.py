@@ -119,7 +119,7 @@ class CrAKNDataset(torch.utils.data.Dataset):
                 self.ids[idx], torch.Tensor(self.targets[idx]))
 
 
-def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_index, original_data=None):
+def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_index):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     node_features = []
     AMDs = []
@@ -168,13 +168,13 @@ def convert_to_pretrain_dataset(vlm: torch.nn.Module,
                                 val_loader: torch.utils.data.DataLoader,
                                 test_loader: torch.utils.data.DataLoader,
                                 config: TrainingConfig):
-    d = retrieve_data(config)
-    train_dataset = _convert(vlm, train_loader, target_index=config.mo_target_index, original_data=d)
-    val_dataset = _convert(vlm, val_loader, target_index=config.mo_target_index, original_data=d)
-    test_dataset = _convert(vlm, test_loader, target_index=config.mo_target_index, original_data=d)
+    d = data(config.dataset)
+    train_dataset = _convert(vlm, train_loader, target_index=config.mo_target_index)
+    val_dataset = _convert(vlm, val_loader, target_index=config.mo_target_index)
+    test_dataset = _convert(vlm, test_loader, target_index=config.mo_target_index)
 
     if config.base_config.mtype == "GNN":
-        return knowledge_graph(train_dataset, val_dataset, test_dataset, config)
+        return knowledge_graph(train_dataset, val_dataset, test_dataset, config, d)
 
     return (DataLoader(dataset, batch_size=config.batch_size,
                        sampler=SubsetRandomSampler([i for i in range(len(dataset))]),

@@ -252,7 +252,12 @@ class CrAKN(nn.Module):
                           config.num_heads, config.head_dim, dropout=config.dropout,
                           embed_value=False, bias_dim=config.expansion_size)
              for _ in range(config.layers)])
-        self.node_updates = nn.ModuleList([CrAKNVectorAttention(config.embedding_dim) for _ in range(config.layers)])
+        self.node_updates = nn.ModuleList([
+            CrAKNVectorAttention(config.embedding_dim,
+                                 use_bias=False,
+                                 use_multiplier=False,
+                                 attention_dropout=0.1)
+            for _ in range(config.layers)])
 
         self.ln1 = nn.LayerNorm(config.embedding_dim)
         self.ln2 = nn.LayerNorm(config.embedding_dim)
@@ -424,14 +429,14 @@ class CrAKN(nn.Module):
             bias = None
 
         for layer, node_update in zip(self.layers, self.node_updates):
-            #q, k, predictions_updated, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
-            #                                        bias=bias, mask=mask)
+            #q, k, predictions, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
+            #                                        bias=None, mask=mask)
             k = node_update(k, pos=edge_features)
+            if self.training:
+                q = self.dropout(q)
             q = k[-q.shape[0]:]
-            q = self.dropout(q)
-            #predictions = (predictions_updated + predictions) / 2
 
-        return self.out(q) #predictions
+        return self.out(q)
 
     def graph_forward(self, inputs):
         g, original_ids, target_ids = inputs

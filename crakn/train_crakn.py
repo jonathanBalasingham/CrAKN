@@ -127,6 +127,7 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
     normalizer = Normalizer(sample_targets)
 
     # train the model!
+    torch.autograd.set_detect_anomaly(True)
     for epoch in range(config.epochs):
         batch_time = AverageMeter()
         data_time = AverageMeter()
@@ -168,7 +169,7 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if epoch % 25 == 0 and step % 25 == 0:
+            if epoch % 1 == 0 and step % 5 == 0:
                 print('Epoch: [{0}][{1}/{2}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
@@ -246,7 +247,7 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
         )
 
         model_file = os.path.join(model_path,
-                                  f"model_crakn_{config.base_config.backbone}_{config.dataset}_{config.target}.csv")
+                                  f"model_crakn_{config.base_config.backbone}_{config.dataset}_{config.target}")
 
         torch.save(net, model_file)
 
@@ -267,7 +268,6 @@ if __name__ == "__main__":
     import sys
 
     args = parser.parse_args(sys.argv[1:])
-    print(f"Target: {args.target}")
     if args.config_name != "":
         config = loadjson(args.config_name)
         if args.target != "":
@@ -283,4 +283,5 @@ if __name__ == "__main__":
         except Exception as exp:
             print("Check", exp)
 
+    print(config.base_config.backbone_config.outputs)
     train_crakn(args.model_path, config)

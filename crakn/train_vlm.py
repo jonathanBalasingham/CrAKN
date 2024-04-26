@@ -39,7 +39,7 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument(
-    "--config_name",
+    "--config",
     default="",
     help="Name of the config file",
 )
@@ -292,8 +292,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args(sys.argv[1:])
     print(f"Target: {args.target}")
-    if args.config_name != "":
-        config = loadjson(args.config_name)
+    if args.config != "":
+        config = loadjson(args.config)
         if args.target != "":
             config["target"] = args.target
     else:

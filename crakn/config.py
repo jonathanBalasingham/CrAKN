@@ -188,15 +188,20 @@ class TrainingConfig(BaseSettings):
     lr_milestones: List[int] = [150, 200, 400]
     mo_target_index: int = 0
     extra_features: List[TARGET_ENUM] = ["formation_energy_peratom", "exfoliation_energy"]
+    composition_features: Literal["mat2vec", "cgcnn"] = "cgcnn"
     # model configuration
     base_config: CrAKNConfig = CrAKNConfig(name="crakn")
 
     @model_validator(mode="after")
     @classmethod
     def set_input_size(cls, values):
-        """Automatically configure node feature dimensionality."""
         values.base_config.backbone_config.atom_input_features = FEATURESET_SIZE[
             values.atom_features
         ]
+        values.base_config.backbone_config.outputs = len(values.target)
+        values.base_config.extra_features = len(values.extra_features)
+        values.base_config.comp_feat_size = FEATURESET_SIZE[values.composition_features]
+        assert values.batch_size > 1
 
         return values
+

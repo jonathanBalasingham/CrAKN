@@ -1,14 +1,16 @@
+import time
 from functools import partial, reduce
 
 from typing import Any, Dict, Union, Tuple
 import ignite
 import torch
+from scipy.spatial import KDTree
 from sklearn.metrics import mean_absolute_error
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from crakn.core.model import CrAKN
-from crakn.utils import Normalizer
+from crakn.utils import Normalizer, AverageMeter, mae, mse, rmse
 
 try:
     from ignite.contrib.handlers.stores import EpochOutputStore
@@ -46,6 +48,7 @@ import pprint
 
 import os
 import warnings
+import pickle
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -125,37 +128,38 @@ def train_crakn(
         model: nn.Module = None,
         dataloaders: Tuple[DataLoader, DataLoader, DataLoader] = None,
         return_predictions: bool = False):
-    """Training entry point for DGL networks.
 
-    `config` should conform to alignn.conf.TrainingConfig, and
-    if passed as a dict with matching keys, pydantic validation is used
-    """
     import os
 
     if type(config) is dict:
         config = TrainingConfig(**config)
 
+    output_directory = f"{config.base_config.backbone}_{config.dataset}_{'_'.join(config.target)}"
+    output_path = os.path.join(config.output_dir, output_directory)
     if not os.path.exists(config.output_dir):
         os.makedirs(config.output_dir)
 
-    checkpoint_dir = os.path.join(config.output_dir)
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+
+    checkpoint_dir = os.path.join(output_path)
     deterministic = False
     classification = False
 
     tmp = config.dict()
-    f = open(os.path.join(config.output_dir, "config.json"), "w")
+    f = open(os.path.join(output_path, "config.json"), "w")
     f.write(json.dumps(tmp, indent=4))
     f.close()
 
     global tmp_output_dir
-    tmp_output_dir = config.output_dir
+    tmp_output_dir = output_path
     pprint.pprint(tmp)
 
     if config.classification_threshold is not None:
         classification = True
     if config.random_seed is not None:
         deterministic = True
-        ignite.utils.manual_seed(config.random_seed)
+        torch.cuda.manual_seed_all(config.random_seed)
 
     if dataloaders is None:
         structures, targets, ids = retrieve_data(config)
@@ -163,6 +167,18 @@ def train_crakn(
         train_loader, val_loader, test_loader = get_dataloader(dataset, config)
     else:
         train_loader, val_loader, test_loader = dataloaders
+
+    dataloader_savepath = os.path.join(output_path,
+                                       f"dataloader_{config.base_config.backbone}_{config.dataset}_{config.target}")
+    with open(dataloader_savepath, "wb") as f:
+        pickle.dump((train_loader, val_loader, test_loader), f)
+
+    train_ids = [i for dat in train_loader for i in dat[-2]]
+    val_ids = [i for dat in val_loader for i in dat[-2]]
+    test_ids = [i for dat in test_loader for i in dat[-2]]
+    model_name = config.base_config.backbone
+    dumpjson({"train_id": train_ids, "val_id": val_ids, "test_id": test_ids},
+             os.path.join(output_path, f"train_test_ids_{model_name}_{config.dataset}_{config.target}.json"))
 
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
@@ -182,9 +198,10 @@ def train_crakn(
         net = model
 
     net.to(device)
+
     # group parameters to skip weight decay for bias and batchnorm
-    #params = group_decay(net)
-    optimizer = setup_optimizer(net.parameters(), config)
+    params = group_decay(net)
+    optimizer = setup_optimizer(params, config)
 
     if config.scheduler == "none":
         scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -211,269 +228,78 @@ def train_crakn(
     # set up training engine and evaluators
 
     metrics = {"loss": Loss(criterion), "mae": MeanAbsoluteError()}
-
-    if config.base_config.output_features > 1 and config.standard_scalar_and_pca:
-        metrics = {
-            "loss": Loss(
-                criterion, output_transform=make_standard_scalar_and_pca
-            ),
-            "mae": MeanAbsoluteError(
-                output_transform=make_standard_scalar_and_pca
-            ),
-        }
-
-    if config.criterion == "zig":
-        def zig_prediction_transform(x):
-            output, y = x
-            return criterion.predict(output), y
-
-        metrics = {
-            "loss": Loss(criterion),
-            "mae": MeanAbsoluteError(
-                output_transform=zig_prediction_transform
-            ),
-        }
-
-    if classification:
-        criterion = nn.NLLLoss()
-
-        metrics = {
-            "accuracy": Accuracy(
-                output_transform=thresholded_output_transform
-            ),
-            "precision": Precision(
-                output_transform=thresholded_output_transform
-            ),
-            "recall": Recall(output_transform=thresholded_output_transform),
-            "rocauc": ROC_AUC(output_transform=activated_output_transform),
-            "roccurve": RocCurve(output_transform=activated_output_transform),
-            "confmat": ConfusionMatrix(
-                output_transform=thresholded_output_transform, num_classes=2
-            ),
-        }
-    trainer = create_supervised_trainer(
-        net,
-        optimizer,
-        criterion,
-        prepare_batch=prepare_batch,
-        device=device,
-        deterministic=deterministic,
-    )
-
-    evaluator = create_supervised_evaluator(
-        net,
-        metrics=metrics,
-        prepare_batch=prepare_batch_test,
-        device=device,
-    )
-
-    train_evaluator = create_supervised_evaluator(
-        net,
-        metrics=metrics,
-        prepare_batch=prepare_batch,
-        device=device,
-    )
-
-    # ignite event handlers:
-    trainer.add_event_handler(Events.EPOCH_COMPLETED, TerminateOnNan())
-
-    # apply learning rate scheduler
-    trainer.add_event_handler(
-        Events.ITERATION_COMPLETED, lambda engine: scheduler.step()
-    )
-
-    if config.write_checkpoint:
-        # model checkpointing
-        to_save = {
-            "model": net,
-            "optimizer": optimizer,
-            "lr_scheduler": scheduler,
-            "trainer": trainer,
-        }
-        if classification:
-            def cp_score(engine):
-                """Higher accuracy is better."""
-                return engine.state.metrics["accuracy"]
-
-        else:
-            def cp_score(engine):
-                """Lower MAE is better."""
-                return -engine.state.metrics["mae"]
-
-        # save last two epochs
-        evaluator.add_event_handler(
-            Events.EPOCH_COMPLETED,
-            Checkpoint(
-                to_save,
-                DiskSaver(
-                    checkpoint_dir, create_dir=True, require_empty=False
-                ),
-                n_saved=2,
-                global_step_transform=lambda *_: trainer.state.epoch,
-            ),
-        )
-        # save best model
-        evaluator.add_event_handler(
-            Events.EPOCH_COMPLETED,
-            Checkpoint(
-                to_save,
-                DiskSaver(
-                    checkpoint_dir, create_dir=True, require_empty=False
-                ),
-                filename_pattern="best_model.{ext}",
-                n_saved=1,
-                global_step_transform=lambda *_: trainer.state.epoch,
-                score_function=cp_score,
-            ),
-        )
-    if config.progress:
-        pbar = ProgressBar()
-        pbar.attach(trainer, output_transform=lambda x: {"loss": x})
+    sample_targets = torch.concat([data[-1] for data in tqdm(train_loader, "Normalizing..")], dim=0).squeeze()
+    normalizer = Normalizer(sample_targets)
 
     history = {
         "train": {m: [] for m in metrics.keys()},
         "validation": {m: [] for m in metrics.keys()},
     }
 
-    if config.store_outputs:
-        eos = EpochOutputStore()
-        eos.attach(evaluator)
-        train_eos = EpochOutputStore()
-        train_eos.attach(train_evaluator)
-
-    # collect evaluation performance
-    @trainer.on(Events.EPOCH_COMPLETED)
-    def log_results(engine):
-        """Print training and validation metrics to console."""
-        train_evaluator.run(train_loader)
-        evaluator.run(val_loader)
-
-        tmetrics = train_evaluator.state.metrics
-        vmetrics = evaluator.state.metrics
-        for metric in metrics.keys():
-            tm = tmetrics[metric]
-            vm = vmetrics[metric]
-            if metric == "roccurve":
-                tm = [k.tolist() for k in tm]
-                vm = [k.tolist() for k in vm]
-            if isinstance(tm, torch.Tensor):
-                tm = tm.cpu().numpy().tolist()
-                vm = vm.cpu().numpy().tolist()
-
-            history["train"][metric].append(tm)
-            history["validation"][metric].append(vm)
-
-        if config.store_outputs:
-            history["EOS"] = eos.data
-            history["trainEOS"] = train_eos.data
-            dumpjson(
-                filename=os.path.join(config.output_dir, "history_val.json"),
-                data=history["validation"],
-            )
-            dumpjson(
-                filename=os.path.join(config.output_dir, "history_train.json"),
-                data=history["train"],
-            )
-        if config.progress:
-            pbar = ProgressBar()
-            if not classification:
-                pbar.log_message(f"Val_MAE: {vmetrics['mae']:.4f}")
-                pbar.log_message(f"Train_MAE: {tmetrics['mae']:.4f}")
-            else:
-                pbar.log_message(f"Train ROC AUC: {tmetrics['rocauc']:.4f}")
-                pbar.log_message(f"Val ROC AUC: {vmetrics['rocauc']:.4f}")
-
-    if config.n_early_stopping is not None:
-        if classification:
-            def es_score(engine):
-                """Higher accuracy is better."""
-                return engine.state.metrics["accuracy"]
-        else:
-            def es_score(engine):
-                """Lower MAE is better."""
-                return -engine.state.metrics["mae"]
-
-        es_handler = EarlyStopping(
-            patience=config.n_early_stopping,
-            score_function=es_score,
-            trainer=trainer,
-        )
-        evaluator.add_event_handler(Events.EPOCH_COMPLETED, es_handler)
 
     # train the model!
-    trainer.run(train_loader, max_epochs=config.epochs)
+    for epoch in range(config.epochs):
+        batch_time = AverageMeter()
+        data_time = AverageMeter()
+        losses = AverageMeter()
+        mae_errors = [AverageMeter() for _ in range(len(config.target))]
+        end = time.time()
+        net.train()
+        for step, dat in enumerate(train_loader):
+            X, target = prepare_batch(dat)
+            target_normed = normalizer.norm(target).to(device)
+            output = net(X)
+            loss = torch.zeros(1).to(device)
 
-    if config.write_predictions and classification:
-        net.eval()
-        f = open(
-            os.path.join(config.output_dir, "prediction_results_test_set.csv"),
-            "w",
-        )
-        f.write("id,target,prediction\n")
-        targets = []
-        predictions = []
-        with torch.no_grad():
-            ids = test_loader.dataset.ids  # [test_loader.dataset.indices]
-            for dat, id in zip(test_loader, ids):
-                g, lg, target = dat
-                out_data = net([g.to(device), lg.to(device)])
-                # out_data = torch.exp(out_data.cpu())
-                top_p, top_class = torch.topk(torch.exp(out_data), k=1)
-                target = int(target.cpu().numpy().flatten().tolist()[0])
+            for i, prop in enumerate(config.target):
+                inds = torch.where(torch.logical_not(torch.isnan(target[:, i])))[0]
+                loss += criterion(output[inds, i], target_normed[inds, i])
 
-                f.write("%s, %d, %d\n" % (id, (target), (top_class)))
-                targets.append(target)
-                predictions.append(
-                    top_class.cpu().numpy().flatten().tolist()[0]
-                )
-        f.close()
-        from sklearn.metrics import roc_auc_score
+            prediction = normalizer.denorm(output.data.cpu())
 
-        print("predictions", predictions)
-        print("targets", targets)
-        print(
-            "Test ROCAUC:",
-            roc_auc_score(np.array(targets), np.array(predictions)),
-        )
+            prop_mae_errors, prop_mse_errors, prop_rmse_errors = [], [], []
+            for i, prop in enumerate(config.target):
+                prop_mae_errors.append(mae(prediction[:, i], target[:, i]))
+                prop_mse_errors.append(mse(prediction[:, i], target[:, i]))
+                prop_rmse_errors.append(rmse(prediction[:, i], target[:, i]))
 
-    if (config.write_predictions
-            and not classification
-            and config.base_config.output_features > 1):
-        net.eval()
-        mem = []
-        with torch.no_grad():
-            ids = test_loader.dataset.ids  # [test_loader.dataset.indices]
-            for dat, id in zip(test_loader, ids):
-                g, lg, target = dat
-                out_data = net([g.to(device), lg.to(device)])
-                out_data = out_data.cpu().numpy().tolist()
-                if config.standard_scalar_and_pca:
-                    sc = pk.load(open("sc.pkl", "rb"))
-                    out_data = list(
-                        sc.transform(np.array(out_data).reshape(1, -1))[0]
-                    )  # [0][0]
-                target = target.cpu().numpy().flatten().tolist()
-                info = {}
-                info["id"] = id
-                info["target"] = target
-                info["predictions"] = out_data
-                mem.append(info)
-        dumpjson(filename=os.path.join(config.output_dir, "multi_out_predictions.json"),
-                 data=mem)
+            for i, _ in enumerate(config.target):
+                inds = torch.where(torch.logical_not(torch.isnan(target[:, i])))[0]
+                error_update_size = target[inds, i].size(0)
+                if error_update_size > 0:
+                    mae_errors[i].update(prop_mae_errors[i].cpu().item(), error_update_size)
+            losses.update(loss.cpu().item(), target.size(0))
 
-    if (config.write_predictions
-            and not classification
-            and config.base_config.output_features == 1):
-        net.eval()
-        f = open(
-            os.path.join(config.output_dir, "prediction_results_test_set.csv"),
-            "w",
-        )
-        f.write("id,target,prediction\n")
-        targets = []
-        predictions = []
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        with torch.no_grad():
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if epoch % 25 == 0 and step % 25 == 0:
+                for i, t in enumerate(config.target):
+                    print('Target: {target}\t\t'
+                          'Epoch: [{0}][{1}/{2}]\t'
+                          'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                          'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                          'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                          'MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})'.format(
+                        epoch, step, len(train_loader), batch_time=batch_time,
+                        data_time=data_time, loss=losses, mae_errors=mae_errors[i], target=t)
+                    )
+        scheduler.step()
+
+
+    net.eval()
+    f = open(os.path.join(output_path, "crakn_prediction_results_test_set.csv"), "w")
+    f.write("id,target,prediction\n")
+    targets = []
+    predictions = []
+
+    with torch.no_grad():
+
+        if config.base_config.mtype == "Transformer":
             neighbor_data = []
             for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
                 bb_data, amds, latt, ids, target = dat
@@ -485,63 +311,68 @@ def train_crakn(
                 neighbor_node_features = net.backbone(train_inputs)
                 neighbor_data.append((neighbor_node_features, amds, latt, target))
 
-            for dat in tqdm(test_loader, desc="Predicting on test set.."):
+            test_data = []
+            for dat in tqdm(test_loader, desc="Generating knowledge network node features.."):
                 bb_data, amds, latt, ids, target = dat
-                test_bb_data = bb_data[0]
-                if isinstance(test_bb_data, list) or isinstance(test_bb_data, tuple):
-                    test_bb_data = [i.to(device) for i in test_bb_data]
+                train_inputs = bb_data[0]
+                if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
+                    train_inputs = [i.to(device) for i in train_inputs]
                 else:
-                    test_bb_data = [test_bb_data.to(device)]
+                    train_inputs = train_inputs.to(device)
+                neighbor_node_features = net.backbone(train_inputs)
+                test_data.append((neighbor_node_features, amds, latt, target))
 
-                if config.prediction_method == "ensemble":
-                    out_data = []
-                    for neighbor_datum in neighbor_data:
-                        temp_pred = net(
-                            (test_bb_data + [torch.zeros(bb_data[1].shape).to(device)],
-                             amds.to(device),
-                             latt.to(device),
-                             ids),
-                            neighbors=(datum.to(device) for datum in neighbor_datum)
-                        )
-                        out_data.append(temp_pred[-len(ids):])
-                    ensemble_predictions = torch.stack(out_data)
-                    # print(f"SD of preds: {torch.mean(torch.std(ensemble_predictions, dim=0))}")
-                    out_data = torch.mean(ensemble_predictions, dim=0)
-                    #out_data = normalizer.denorm(out_data)
-                else:
-                    out_data = net(
-                        (test_bb_data + [torch.zeros(bb_data[1].shape).to(device)],
-                         amds.to(device),
-                         latt.to(device),
-                         ids),
-                    )
+            tree = KDTree(torch.concat([i[0] for i in neighbor_data], dim=0))
+            test_embeddings = torch.concat([i[0] for i in test_data])
+            nearest_neighbor_indices = tree.query(test_embeddings, k=config.max_neighbors)[1]
+            test_data = list(zip(*test_data))
+            test_data = [torch.concat(d, dim=0) for d in test_data]
+            test_data = list(zip(*test_data))
 
-                out_data = out_data.cpu().numpy().tolist()
-                if config.standard_scalar_and_pca:
-                    sc = pk.load(
-                        open(os.path.join(tmp_output_dir, "sc.pkl"), "rb")
-                    )
-                    out_data = sc.transform(np.array(out_data).reshape(-1, 1))[
-                        0
-                    ][0]
+            neighbor_data = list(zip(*neighbor_data))
+            neighbor_data = [torch.concat(d, dim=0) for d in neighbor_data]
+            neighbor_data = list(zip(*neighbor_data))
+
+            for nni, dat in tqdm(zip(nearest_neighbor_indices, test_data), desc="Predicting on test set.."):
+                nf, amds, latt, target = dat
+
+                if nf.dim() < 2:
+                    nf = nf.unsqueeze(0)
+
+                if amds.dim() < 2:
+                    amds = amds.unsqueeze(0)
+
+                neighbor_datum = [neighbor_data[i] for i in nni]
+                neighbor_datum = list(zip(*neighbor_datum))
+                neighbor_datum = [torch.vstack(i) for i in neighbor_datum]
+
+                temp_pred = net(
+                    ([nf.to(device), torch.zeros(bb_data[1].shape).to(device)],
+                     amds.to(device),
+                     latt.to(device),
+                     torch.zeros(len(target))),
+                    neighbors=(datum.to(device) for datum in neighbor_datum),
+                    direct=True
+                )
+                prediction = temp_pred[-len(target):]
+
+                pred = normalizer.denorm(prediction).data.numpy().flatten().tolist()
                 target = target.cpu().numpy().flatten().tolist()
-                if len(target) == 1:
-                    target = target[0]
+                targets.append(target)
+                predictions.append(pred)
+        else:
+            for dat in tqdm(test_loader, desc="Predicting on test set.."):
+                g, original_ids, node_ids, ids, target = dat
+                out_data = net((g.to(device), original_ids.to(device), node_ids.to(device)))
+                target = target.cpu().numpy().flatten().tolist()
+                pred = normalizer.denorm(out_data.cpu()).data.numpy().flatten().tolist()
+                targets.append(target)
+                predictions.append(pred)
 
-                if isinstance(targets, list):
-                    target = target if isinstance(target, list) else [target]
-                    targets += target
-                    if isinstance(out_data[0], list):
-                        out_data = [od[0] for od in out_data]
-
-                    predictions += out_data
-                    for id, t, p in zip(ids, target, out_data):
-                        f.write("%s, %6f, %6f\n" % (id, t, p))
-                else:
-                    f.write("%s, %6f, %6f\n" % (id, target, out_data))
-                    targets.append(target)
-                    predictions.append(out_data)
         f.close()
+
+        targets = reduce(lambda x, y: x + y, targets)
+        predictions = reduce(lambda x, y: x + y, predictions)
 
         print("Test MAE:",
               mean_absolute_error(np.array(targets), np.array(predictions)))
@@ -552,28 +383,26 @@ def train_crakn(
         print(f"Test MAD: {mad(torch.Tensor(targets))}")
 
         with open("res.txt", "a") as f:
-            f.write(f"Test MAE ({config.base_config.backbone}, {config.target}, {config.base_config.backbone_only}) : {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")
+            f.write(
+                f"Test MAE ({config.base_config.backbone}, {config.dataset}, {config.target}, {config.base_config.backbone_only}) :"
+                f" {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")
 
-        if config.store_outputs and not classification:
-            resultsfile = os.path.join(
-                config.output_dir, "prediction_results_train_set.csv"
-            )
+        resultsfile = os.path.join(
+            config.output_dir, "crakn_prediction_results_test_set.csv"
+        )
 
-            target_vals, predictions = [], []
+        model_file = os.path.join(output_path,
+                                  f"full_model_crakn_{config.base_config.backbone}_{config.dataset}_{config.target}")
 
-            for tgt, pred in history["trainEOS"]:
-                target_vals.append(tgt.cpu().numpy().flatten().tolist())
-                predictions.append(pred.cpu().numpy().flatten().tolist())
+        torch.save(net, model_file)
 
-            target_vals = reduce(lambda x, y: x + y, target_vals)
-            predictions = reduce(lambda x, y: x + y, predictions)
-            target_vals = np.array(target_vals, dtype="float").flatten()
-            predictions = np.array(predictions, dtype="float").flatten()
+        target_vals = np.array(targets, dtype="float").flatten()
+        predictions = np.array(predictions, dtype="float").flatten()
 
-            with open(resultsfile, "w") as f:
-                print("target,prediction", file=f)
-                for target_val, predicted_val in zip(target_vals, predictions):
-                    print(f"{target_val}, {predicted_val}", file=f)
+        with open(resultsfile, "w") as f:
+            print("target,prediction", file=f)
+            for target_val, predicted_val in zip(target_vals, predictions):
+                print(f"{target_val}, {predicted_val}", file=f)
 
     if return_predictions:
         return history, predictions

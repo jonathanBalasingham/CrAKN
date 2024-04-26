@@ -5,12 +5,15 @@ from torch import nn
 import torch.nn.functional as F
 import math
 
+import crakn.core.layers
 from crakn.backbones.matformer import MatformerConfig, Matformer
 from crakn.backbones.pst_v2 import PeriodicSetTransformerV2, PSTv2Config
 from crakn.backbones.utils import RBFExpansion
 from crakn.utils import BaseSettings
 from typing import Literal, Union, Tuple
 import dgl
+from dgl import function as fn
+
 
 from ..backbones.gcn import SimpleGCNConfig, SimpleGCN
 from ..backbones.pst import PeriodicSetTransformer, PSTConfig
@@ -29,6 +32,7 @@ class CrAKNConfig(BaseSettings):
     dropout: float = 0
     output_features: int = 1
     amd_k: int = 100
+    comp_feat_size: int = 200
     extra_features: int = 4
     classification: bool = False
     backbone_only: bool = False
@@ -66,8 +70,8 @@ class CrAKNVectorAttention(nn.Module):
             embedding_dim,
             attention_dropout=0.0,
             qkv_bias=True,
-            use_multiplier=False,
-            use_bias=False,
+            use_multiplier=True,
+            use_bias=True,
             activation=nn.Mish
     ):
         super(CrAKNVectorAttention, self).__init__()
@@ -122,12 +126,12 @@ class CrAKNVectorAttention(nn.Module):
         relation_qk = key.unsqueeze(-2) - query.unsqueeze(-1)
         if pos is not None:
             pos = pos.unsqueeze(-2) - pos.unsqueeze(-1)
-        if self.delta_mul:
-            pem = self.linear_p_multiplier(pos)
-            relation_qk = relation_qk * pem
-        if self.delta_bias:
-            peb = self.linear_p_bias(pos)
-            relation_qk = relation_qk + peb
+            if self.delta_mul:
+                pem = self.linear_p_multiplier(pos)
+                relation_qk = relation_qk * pem
+            if self.delta_bias:
+                peb = self.linear_p_bias(pos)
+                relation_qk = relation_qk + peb
 
         weight = self.weight_encoding(relation_qk)
         weight = self.attn_drop(F.softmax(weight, dim=-2))
@@ -241,10 +245,10 @@ class CrAKN(nn.Module):
         # self.layers = [CrAKNLayer(config.embedding_dim) for _ in range(config.layers)]
         self.embedding = nn.Linear(config.backbone_config.output_features, config.embedding_dim)
         atom_feature_size = 200 if config.backbone_config.atom_features == "mat2vec" else 92
-        self.edge_embedding = nn.Linear(config.amd_k + atom_feature_size, config.embedding_dim)
+        self.edge_embedding = nn.Linear(config.amd_k + config.comp_feat_size, config.embedding_dim)
         self.expansion = RBFExpansion(0, config.cutoff, config.expansion_size)
         self.layers = nn.ModuleList(
-            [CrAKNEncoder(config.embedding_dim, config.embedding_dim, 1,
+            [CrAKNEncoder(config.embedding_dim, config.embedding_dim, config.backbone_config.outputs,
                           config.num_heads, config.head_dim, dropout=config.dropout,
                           embed_value=False, bias_dim=config.expansion_size)
              for _ in range(config.layers)])
@@ -256,7 +260,10 @@ class CrAKN(nn.Module):
             self.out = nn.Linear(config.backbone_config.output_features, config.output_features)
         else:
             self.out = nn.Linear(config.embedding_dim, config.output_features)
-        self.backbone_out = nn.Linear(config.backbone_config.output_features, config.output_features)
+        self.backbone_out = nn.Linear(
+            config.backbone_config.output_features,
+            config.backbone_config.outputs
+        )
         self.bn = nn.BatchNorm1d(config.embedding_dim)
         self.backbone_only = config.backbone_only
         self.attention_bias = config.attention_bias
@@ -266,6 +273,7 @@ class CrAKN(nn.Module):
                                        nn.Mish(), nn.Linear(config.embedding_dim, 1))
 
         emb_dim = config.embedding_dim
+        ef_dim = config.backbone_config.outputs
         self.embedding = nn.Linear(
             config.backbone_config.output_features,
             emb_dim
@@ -337,18 +345,18 @@ class CrAKN(nn.Module):
             num_heads=1
         ) for _ in range(config.layers)])
 
-        self.struct_egnn = nn.ModuleList([dgl.nn.pytorch.conv.EGNNConv(
+        self.struct_egnn = nn.ModuleList([crakn.core.layers.EGNNConv(
             emb_dim,
             emb_dim,
             emb_dim,
             emb_dim,
         ) for _ in range(config.layers)])
 
-        self.comp_egnn = nn.ModuleList([dgl.nn.pytorch.conv.EGNNConv(
+        self.comp_egnn = nn.ModuleList([crakn.core.layers.EGNNConv(
             emb_dim,
             emb_dim,
             emb_dim,
-            emb_dim,
+            0 #emb_dim*2,
         ) for _ in range(config.layers)])
 
         self.ef_embedding = nn.Linear(config.backbone_config.outputs, emb_dim)
@@ -357,6 +365,15 @@ class CrAKN(nn.Module):
             [nn.BatchNorm1d(emb_dim) for _ in range(config.layers)]
         )
 
+        self.CrAKNConv = nn.ModuleList([crakn.core.layers.CrAKNConvV2(
+            emb_dim,
+            ["comp", "struct", "prop"],
+            use_bias=True,
+            use_multiplier=True
+        ) for _ in range(config.layers)])
+
+        self.ln_ef = nn.LayerNorm(emb_dim)
+        self.dropout = nn.Dropout(p=0.1)
         self.out = nn.Linear(emb_dim, config.output_features)
 
     def transformer_forward(self, inputs, neighbors=None, direct=False) -> torch.Tensor:
@@ -388,7 +405,7 @@ class CrAKN(nn.Module):
             mask.to(target_node_features.device)
 
         if self.backbone_only:
-            return self.out(target_node_features)
+            return self.backbone_out(target_node_features)
 
         predictions = self.backbone_out(target_node_features)
 
@@ -400,43 +417,43 @@ class CrAKN(nn.Module):
         edge_features = torch.concat([neighbor_edge_features, target_edge_features], dim=0)
 
         if self.attention_bias:
-            bias = torch.cdist(target_edge_features, edge_features).unsqueeze(-1)
-            bias = self.expansion(bias).squeeze()
+            #bias = torch.cdist(target_edge_features, edge_features).unsqueeze(-1)
+            #bias = self.expansion(bias).squeeze()
             edge_features = self.edge_embedding(edge_features)
         else:
             bias = None
 
         for layer, node_update in zip(self.layers, self.node_updates):
-            q, k, predictions_updated, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
-                                                    bias=bias, mask=mask)
-            k = node_update(k, pos=None)
+            #q, k, predictions_updated, bias = layer(q, k, torch.concat([neighbor_target, predictions], dim=0),
+            #                                        bias=bias, mask=mask)
+            k = node_update(k, pos=edge_features)
             q = k[-q.shape[0]:]
-            predictions = (predictions_updated + predictions) / 2
+            q = self.dropout(q)
+            #predictions = (predictions_updated + predictions) / 2
 
-        return predictions
+        return self.out(q) #predictions
 
     def graph_forward(self, inputs):
         g, original_ids, target_ids = inputs
         g.local_var()
+
         node_features = g.ndata["node_features"]
         node_features = self.embedding(node_features)
-        ef = self.ef_embedding(g.ndata["extra_features"])
 
-        comp_edge_features = self.diff_comp_embedding(g.edata["comp"])
-        struct_edge_features = self.diff_struct_embedding(g.edata["struct"])
+        g.ndata["extra_features"] = self.ef_embedding(g.ndata["extra_features"])
+        #ef = g.ndata["extra_features"]
+        g.edata["comp"] = self.diff_comp_embedding(g.edata["comp"])
+        g.edata["struct"] = self.diff_struct_embedding(g.edata["struct"])
+        g.apply_edges(fn.u_sub_v('extra_features', 'extra_features', 'prop'))
 
-        for c, s, bn in zip(self.comp_egnn, self.struct_egnn, self.bn):
-            #node_features = c(g, node_features, edge_feat=comp_edge_features)
-            #node_features = s(g, node_features, edge_feat=struct_edge_features)
-            #node_features = bn(node_features)
-            ef, node_features = c(g, ef, node_features, comp_edge_features)
-            ef, node_features = s(g, ef, node_features, struct_edge_features)
+        for conv in self.CrAKNConv:
+            node_features = conv(g, node_features)
 
         return self.out(node_features)[original_ids]
 
-    def forward(self, inputs):
+    def forward(self, inputs, direct=False, neighbors=None):
         if self.model_type == "Transformer":
-            return self.transformer_forward(inputs)
+            return self.transformer_forward(inputs, direct=direct, neighbors=neighbors)
         elif self.model_type == "GNN":
             return self.graph_forward(inputs)
         else:

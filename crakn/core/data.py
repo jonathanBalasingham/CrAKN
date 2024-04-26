@@ -98,9 +98,15 @@ class CrAKNDataset(torch.utils.data.Dataset):
             structures = [s.pymatgen_converter() for s in structures]
         periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in
                          tqdm(structures, desc="Creating Periodic Sets..")]
-        mat2vec = pd.read_csv(Path(__file__).parent.parent / "data" / "mat2vec.csv").to_numpy()[:, 1:].astype(
-            np.float64)
-        comp = np.vstack([np.mean(mat2vec[ps.types - 1], axis=0) for ps in periodic_sets])
+        if config.composition_features == "mat2vec":
+            af = pd.read_csv(Path(__file__).parent.parent / "data" / "mat2vec.csv").to_numpy()[:, 1:].astype(
+                np.float64)
+        else:
+            import json
+            af = json.load(open(Path(__file__).parent.parent / "data" / "atom_init.json"))
+            af = np.vstack(list(af.values()))
+
+        comp = np.vstack([np.mean(af[ps.types - 1], axis=0) for ps in periodic_sets])
         amds = np.vstack([amd.AMD(ps, k=config.base_config.amd_k)
                           for ps in tqdm(periodic_sets, desc="Calculating AMDs..")])
         self.amds = np.concatenate([comp, amds], axis=1)
@@ -119,7 +125,7 @@ class CrAKNDataset(torch.utils.data.Dataset):
                 self.ids[idx], torch.Tensor(self.targets[idx]))
 
 
-def _convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_index):
+def convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_index):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     node_features = []
     AMDs = []
@@ -174,9 +180,9 @@ def convert_to_pretrain_dataset(vlm: torch.nn.Module,
                                 test_loader: torch.utils.data.DataLoader,
                                 config: TrainingConfig):
     d = data(config.dataset)
-    train_dataset = _convert(vlm, train_loader, target_index=config.mo_target_index)
-    val_dataset = _convert(vlm, val_loader, target_index=config.mo_target_index)
-    test_dataset = _convert(vlm, test_loader, target_index=config.mo_target_index)
+    train_dataset = convert(vlm, train_loader, target_index=config.mo_target_index)
+    val_dataset = convert(vlm, val_loader, target_index=config.mo_target_index)
+    test_dataset = convert(vlm, test_loader, target_index=config.mo_target_index)
 
     if config.base_config.mtype == "GNN":
         return knowledge_graph(train_dataset, val_dataset, test_dataset, config, d)
@@ -253,7 +259,7 @@ def collate_pretrain_crakn_data(dataset_list):
 
 def prepare_crakn_batch(batch, device=None, internal_prepare_batch=None, non_blocking=False, variable=True):
     if variable:
-        subset = random.randrange(len(batch[-1]) // 4, len(batch[-1]))
+        subset = random.randrange(2, len(batch[-1]))
     else:
         subset = len(batch[-1])
 

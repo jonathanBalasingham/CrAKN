@@ -63,12 +63,13 @@ def knowledge_graph(train_dataset, val_dataset, test_dataset, config: TrainingCo
     g = dgl.graph(data=[])
     g.add_nodes(num_nodes)
     comp_struct = np.vstack([train_dataset.amds, val_dataset.amds])
-    comp = comp_struct[:, :200]
-    struct = comp_struct[:, 200:]
+    af_dim = 200 if config.composition_features == "mat2vec" else 92
+    comp = comp_struct[:, :af_dim]
+    struct = comp_struct[:, af_dim:]
 
     test_comp_struct = np.vstack([test_dataset.amds])
-    test_comp = test_comp_struct[:, :200]
-    test_struct = test_comp_struct[:, 200:]
+    test_comp = test_comp_struct[:, :af_dim]
+    test_struct = test_comp_struct[:, af_dim:]
 
     edge_list = nearest_neighbors_to_edge_list(
         find_nearest_neighbors(comp, struct,
@@ -89,6 +90,8 @@ def knowledge_graph(train_dataset, val_dataset, test_dataset, config: TrainingCo
 
     g.edata["comp"] = comp_feat[u] - comp_feat[v]
     g.edata["struct"] = struct_feat[u] - struct_feat[v]
+    g.ndata["comp"] = comp_feat
+    g.ndata["struct"] = struct_feat
 
     g.ndata["node_features"] = torch.Tensor(
         np.vstack([
@@ -131,7 +134,14 @@ def knowledge_graph(train_dataset, val_dataset, test_dataset, config: TrainingCo
         ])
     )
 
-    ef[ef == 0] = base_predictions[ef == 0]
+    #ef[ef == 0] = base_predictions[ef == 0]
+    ef = base_predictions
+    assert torch.logical_not(torch.any(torch.isnan(ef)))
+    assert torch.logical_not(torch.any(torch.isnan(g.ndata["node_features"])))
+
+    #ef = (ef - torch.min(ef, dim=0).values) / (torch.max(ef, dim=0).values - torch.min(ef, dim=0).values)
+    #g.ndata["node_features"] = ((g.ndata["node_features"] - torch.min(g.ndata["node_features"], dim=0).values) /
+    #                            (torch.max(g.ndata["node_features"], dim=0).values - torch.min(g.ndata["node_features"], dim=0).values))
     g.ndata["extra_features"] = ef
 
     indices = [i for i in range(targets.shape[0])]

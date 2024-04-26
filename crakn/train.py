@@ -323,8 +323,8 @@ def train_crakn(
                 neighbor_node_features = net.backbone(train_inputs)
                 test_data.append((neighbor_node_features, amds, latt, target))
 
-            tree = KDTree(torch.concat([i[0] for i in neighbor_data], dim=0))
-            test_embeddings = torch.concat([i[0] for i in test_data])
+            tree = KDTree(torch.concat([i[0] for i in neighbor_data], dim=0).cpu())
+            test_embeddings = torch.concat([i[0] for i in test_data]).cpu()
             nearest_neighbor_indices = tree.query(test_embeddings, k=config.max_neighbors)[1]
             test_data = list(zip(*test_data))
             test_data = [torch.concat(d, dim=0) for d in test_data]
@@ -355,7 +355,7 @@ def train_crakn(
                     neighbors=(datum.to(device) for datum in neighbor_datum),
                     direct=True
                 )
-                prediction = temp_pred[-len(target):]
+                prediction = temp_pred[-len(target):].cpu()
 
                 pred = normalizer.denorm(prediction).data.numpy().flatten().tolist()
                 target = target.cpu().numpy().flatten().tolist()

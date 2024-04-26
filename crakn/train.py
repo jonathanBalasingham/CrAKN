@@ -256,6 +256,7 @@ def train_crakn(
                 loss += criterion(output[inds, i], target_normed[inds, i])
 
             prediction = normalizer.denorm(output.data.cpu())
+            target = target.cpu()
 
             prop_mae_errors, prop_mse_errors, prop_rmse_errors = [], [], []
             for i, prop in enumerate(config.target):

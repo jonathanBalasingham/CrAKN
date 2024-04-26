@@ -41,5 +41,5 @@ script-files = ["crakn/train_all.py"]
 
 [tool.hatch.build]
 include = [
-  "crakn/data/*.csv",
+  "crakn/data/*.csv", "crakn/data/atom_init.json"
 ]

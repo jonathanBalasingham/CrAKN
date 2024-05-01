@@ -6,8 +6,12 @@ from pathlib import Path
 import amd
 import jarvis.core.atoms
 import numpy as np
+from scipy.spatial import KDTree
+from torch import nn
+from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 
+from crakn.backbones.cgcnn import CGCNNData
 from crakn.backbones.gcn import GCNData
 from crakn.backbones.matformer import MatformerData
 from crakn.backbones.pst import PSTData
@@ -29,6 +33,7 @@ from crakn.core.graph import knowledge_graph
 DATA_FORMATS = {
     "PST": "pymatgen",
     "Matformer": "jarvis",
+    "CGCNN": "jarvis",
     "SimpleGCN": "pymatgen",
     "PSTv2": "pymatgen"
 }
@@ -36,7 +41,7 @@ DATA_FORMATS = {
 
 def retrieve_data(config: TrainingConfig) -> Tuple[List[Structure], List[List[float]], List]:
     if config.dataset == "matbench":
-        pass
+        raise NotImplementedError("Matbench not implemented")
     else:
         d = data(config.dataset)
 
@@ -84,6 +89,8 @@ def get_dataset(structures, targets, ids, config):
         return GCNData(structures, targets, ids, config)
     elif config.name == "Matformer":
         return MatformerData(structures, targets, ids, config)
+    elif config.name == "CGCNN":
+        return CGCNNData(structures, targets, ids, config)
     else:
         raise NotImplementedError(f"Not implemented yet, {config.name}")
 
@@ -152,9 +159,12 @@ def convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_in
                 train_inputs = train_inputs.to(device)
 
             with torch.no_grad():
-                nf = vlm(train_inputs)
+                nf = vlm(train_inputs, output_level="atom")
                 base_preds = vlm(train_inputs, output_level="property")
-                nf = nf.cpu()
+                if isinstance(nf, tuple):
+                    nf = [i.cpu() for i in nf]
+                else:
+                    nf = nf.cpu()
                 base_preds = base_preds.cpu()
 
             node_features.append(nf)
@@ -164,7 +174,6 @@ def convert(vlm: torch.nn.Module, loader: torch.utils.data.DataLoader, target_in
             targets.append(target[:, target_index])
             cids.append(ids)
 
-    node_features = torch.concat(node_features, dim=0)
     base_preds = torch.concat(preds, dim=0)
     AMDs = torch.concat(AMDs, dim=0)
     lattices = torch.concat(lattices, dim=0)
@@ -250,7 +259,7 @@ def collate_pretrain_crakn_data(dataset_list):
         targets.append(target)
         ids.append(datum_id)
 
-    return (torch.stack(node_features, dim=0),
+    return (pad_sequence(node_features, batch_first=True),
             torch.stack(amds, dim=0),
             torch.stack(lattices, dim=0),
             ids,
@@ -312,6 +321,7 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
                               num_workers=config.num_workers,
                               collate_fn=collate_fn, pin_memory=config.pin_memory,
                               shuffle=False)
+
     val_loader = DataLoader(dataset, batch_size=config.batch_size,
                             sampler=val_sampler,
                             num_workers=config.num_workers,
@@ -328,6 +338,40 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
                              num_workers=config.num_workers,
                              collate_fn=collate_fn, pin_memory=config.pin_memory)
     return train_loader, val_loader, test_loader
+
+
+def create_test_dataloader(net: nn.Module, train_loader, test_loader, prepare_batch, max_neighbors):
+    neighbor_data = []
+    for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
+        X, target = prepare_batch(dat)
+        neighbor_node_features = net(X, return_embeddings=True)
+        neighbor_data.append((neighbor_node_features, X[1], X[2], target))
+
+    test_data = []
+    for dat in tqdm(test_loader, desc="Generating knowledge network node features.."):
+        X, target = prepare_batch(dat)
+        neighbor_node_features = net(X, return_embeddings=True)
+        test_data.append((neighbor_node_features, X[1], X[2], target))
+
+    tree = KDTree(torch.concat([i[0] for i in neighbor_data], dim=0).cpu())
+    test_embeddings = torch.concat([i[0] for i in test_data]).cpu()
+    nearest_neighbor_indices = tree.query(test_embeddings, k=max_neighbors)[1]
+    td = []
+
+    for i, test_datum in enumerate(test_loader.dataset):
+        nni = nearest_neighbor_indices[i]
+        nn_data = [train_loader.dataset[i] for i in nni]
+        nn_data.append(test_datum)
+        nn_data = list(zip(*nn_data))
+
+        temp_data = (train_loader.dataset.data.collate_fn(nn_data[0]),
+                     torch.stack(nn_data[1], dim=0),
+                     torch.stack(nn_data[2], dim=0),
+                     nn_data[3],
+                     torch.stack(nn_data[4], dim=0))
+        td.append(temp_data)
+
+    return td
 
 
 if __name__ == "__main__":

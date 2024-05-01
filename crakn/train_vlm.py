@@ -74,10 +74,6 @@ def train_vlm(
     if not os.path.exists(output_path):
         os.makedirs(output_path)
 
-    checkpoint_dir = os.path.join(output_path)
-    deterministic = False
-    classification = False
-
     tmp = config.dict()
     f = open(os.path.join(output_path, "config.json"), "w")
     f.write(json.dumps(tmp, indent=4))
@@ -87,8 +83,7 @@ def train_vlm(
     tmp_output_dir = output_path
     pprint.pprint(tmp)
 
-    if config.classification_threshold is not None:
-        classification = True
+
     if config.random_seed is not None:
         deterministic = True
         torch.cuda.manual_seed_all(config.random_seed)
@@ -101,7 +96,7 @@ def train_vlm(
         train_loader, val_loader, test_loader = dataloaders
 
     dataloader_savepath = os.path.join(output_path,
-                                       f"dataloader_{config.base_config.backbone}_{config.dataset}_{config.target}")
+                                       f"dataloader_{config.base_config.backbone}_{config.dataset}_{'_'.join(config.target)}")
     with open(dataloader_savepath, "wb") as f:
         pickle.dump((train_loader, val_loader, test_loader), f)
 
@@ -110,12 +105,9 @@ def train_vlm(
     test_ids = [i for dat in test_loader for i in dat[-2]]
     model_name = config.base_config.backbone
     dumpjson({"train_id": train_ids, "val_id": val_ids, "test_id": test_ids},
-             os.path.join(output_path, f"train_test_ids_{model_name}_{config.dataset}_{config.target}.json"))
+             os.path.join(output_path, f"train_test_ids_{model_name}_{config.dataset}_{'_'.join(config.target)}.json"))
 
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
-
-    if classification:
-        config.base_config.classification = True
 
     if model is None:
         net = CrAKN(config.base_config).backbone
@@ -270,8 +262,8 @@ def train_vlm(
         print(f"Results written to {output_path}")
 
         model_file = os.path.join(output_path,
-                                  f"model_{config.base_config.backbone}_{config.dataset}_{config.target}")
-
+                                  f"model_{config.base_config.backbone}_{config.dataset}_{'_'.join(config.target)}")
+        print(f"Model file: {model_file}")
         torch.save(net, model_file)
 
         target_vals = np.array(targets, dtype="float").flatten()
@@ -283,8 +275,8 @@ def train_vlm(
                 print(f"{cid}, {target_val}, {predicted_val}", file=f)
 
     if return_predictions:
-        return history, predictions
-    return history
+        return output_path, predictions
+    return output_path
 
 
 if __name__ == '__main__':

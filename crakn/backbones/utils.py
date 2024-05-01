@@ -48,7 +48,6 @@ class RBFExpansion(nn.Module):
         )
 
 
-
 class AtomFeaturizer(nn.Module):
     def __init__(self, id_prop_file="mat2vec.csv", use_cuda=True):
         super(AtomFeaturizer, self).__init__()

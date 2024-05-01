@@ -186,6 +186,10 @@ class PeriodicSetTransformerV2(nn.Module):
         self.out = nn.Linear(config.embedding_features, config.output_features)
         self.final = nn.Linear(config.output_features, config.outputs)
 
+    @staticmethod
+    def pooling(distribution, x):
+        return torch.sum(distribution * x, dim=1)
+
     def forward(self, features, output_level: Literal["atom", "crystal", "property"] = "crystal"):
         str_fea, comp_fea, cloud_fea = features
         distribution = str_fea[:, :, 0, None]
@@ -205,7 +209,7 @@ class PeriodicSetTransformerV2(nn.Module):
             x = encoder(x, distribution, pos)
 
         if output_level == "atom":
-            return torch.concatenate([distribution, x], dim=-1)
+            return distribution, x
 
         x = torch.sum(distribution * (x + x_init), dim=1)
         x = self.decoder(self.ln(x))

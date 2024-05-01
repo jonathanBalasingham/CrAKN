@@ -1,17 +1,26 @@
-from typing import Tuple
+from pathlib import Path
+from typing import Tuple, List
 
 import dgl
 import dgl.function as fn
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 from dgl.nn import AvgPooling
 from typing import Literal
+
+from jarvis.core.specie import get_node_attributes, chem_data
 from torch import nn
+from torch.nn.utils.rnn import pad_sequence
+from torch_geometric.data import Data, Batch
+from tqdm import tqdm
+
+from crakn.backbones.graphs import Graph
 
 # import torch
-from .utils import RBFExpansion, AtomFeaturizer
-from ..utils import BaseSettings
+from crakn.backbones.utils import RBFExpansion, AtomFeaturizer
+from crakn.utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
 
@@ -23,12 +32,13 @@ class CGCNNConfig(BaseSettings):
     conv_layers: int = 3
     atom_input_features: int = 92
     edge_features: int = 40
-    layers: int = 1
     embedding_features: int = 256
     output_features: int = embedding_features
-    link: Literal["identity", "log", "logit"] = "identity"
-    zero_inflated: bool = False
-    classification: bool = False
+    outputs: int  = 1
+    neighbor_strategy: str = "k-nearest"
+    cutoff: float = 8.0
+    max_neighbors: int = 12
+    use_canonize: bool = False
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
@@ -107,9 +117,6 @@ class CGCNNConv(nn.Module):
         # residual connection plus nonlinearity
         out = F.softplus(node_feats + h)
 
-        if self.return_messages:
-            return out, m
-
         return out
 
 
@@ -132,87 +139,145 @@ class CGCNN(nn.Module):
             vmin=-np.pi / 2, vmax=np.pi / 2, bins=config.edge_features
         )
 
-        self.af = AtomFeaturizer(use_cuda=config.use_cuda, id_prop_file=id_prop_file)
+        self.af = AtomFeaturizer(use_cuda=torch.cuda.is_available(), id_prop_file=id_prop_file)
 
         self.atom_embedding = nn.Linear(
-            atom_encoding_dim, config.node_features
+            atom_encoding_dim, config.embedding_features
         )
-        self.classification = config.classification
-        self.conv_layers1 = nn.ModuleList(
+
+        self.conv_layers = nn.ModuleList(
             [
-                CGCNNConv(config.node_features, config.edge_features)
+                CGCNNConv(config.embedding_features, config.edge_features)
                 for _ in range(config.conv_layers)
             ]
         )
 
-        self.conv_layers2 = nn.ModuleList(
-            [
-                CGCNNConv(config.edge_features, config.edge_features)
-                for _ in range(config.conv_layers)
-            ]
-        )
         self.readout = AvgPooling()
 
         self.fc = nn.Sequential(
-            nn.Linear(config.node_features, config.embedding_features), nn.Softplus()
+            nn.Linear(config.embedding_features, config.embedding_features), nn.Softplus()
         )
 
-        if config.zero_inflated:
-            # add latent Bernoulli variable model to zero out
-            # predictions in non-negative regression model
-            self.zero_inflated = True
-            self.fc_nonzero = nn.Linear(config.embedding_features, 1)
-            self.fc_scale = nn.Linear(config.embedding_features, 1)
-            # self.fc_shape = nn.Linear(config.fc_features, 1)
-            self.fc_scale.bias.data = torch.tensor(
-                # np.log(2.1), dtype=torch.float
-                2.1,
-                dtype=torch.float,
-            )
-            if self.classification:
-                raise ValueError(
-                    "Classification not implemented with ZIG loss."
-                )
-        else:
-            self.zero_inflated = False
-            if self.classification:
-                self.fc_out = nn.Linear(config.embedding_features, 2)
-                self.softmax = nn.LogSoftmax(dim=1)
-            else:
-                self.fc_out = nn.Linear(
-                    config.embedding_features, config.output_features
-                )
-        self.link = None
-        self.link_name = config.link
-        if config.link == "identity":
-            self.link = lambda x: x
-        elif config.link == "log":
-            self.link = torch.exp
-            avg_gap = 0.7  # magic number -- average bandgap in dft_3d
-            if not self.zero_inflated:
-                self.fc_out.bias.data = torch.tensor(
-                    np.log(avg_gap), dtype=torch.float
-                )
-        elif config.link == "logit":
-            self.link = torch.sigmoid
+        self.fc_out = nn.Linear(
+            config.embedding_features, config.outputs
+        )
 
-    def forward(self, g) -> torch.Tensor:
+    @staticmethod
+    def pooling(distribution, x):
+        pooled = torch.sum(x, dim=1) / torch.sum(distribution, dim=1)
+        return pooled
+
+    def forward(self, g, output_level: Literal["atom", "crystal", "property"]) -> torch.Tensor:
         """CGCNN function mapping graph to outputs."""
         g = g.local_var()
 
-        bondlength = g.edata["distances"]
+        bondlength = torch.norm(g.edata["r"], dim=-1)
         edge_features = self.rbf(bondlength)
 
         # initial node features: atom feature network...
-        v = g.ndata.pop("atom_types")
+        v = g.ndata.pop("atom_features")
         node_features = self.atom_embedding(self.af(v))
 
         # CGCNN-Conv block: update node features
-        for conv_layer1, conv_layer2 in zip(
-                self.conv_layers1, self.conv_layers2
-        ):
-            node_features = conv_layer1(g, node_features, edge_features)
+        for conv_layer in self.conv_layers:
+            node_features = conv_layer(g, node_features, edge_features)
+
+        if output_level == "atom":
+            g.ndata["node_features"] = node_features
+            node_features = [i.ndata["node_features"] for i in dgl.unbatch(g)]
+            node_features = pad_sequence(node_features, batch_first=True)
+            weights = torch.sum(torch.abs(node_features), dim=-1, keepdim=True)
+            weights[weights > 0] = 1
+            return weights, node_features
 
         # crystal-level readout
         features = self.readout(g, node_features)
+
+        if output_level == "crystal":
+            return features
+
+        return self.fc_out(features)
+
+
+class CGCNNData(torch.utils.data.Dataset):
+    """Dataset of crystal DGLGraphs."""
+
+    def __init__(
+            self,
+            structures,
+            targets,
+            ids,
+            config: CGCNNConfig = CGCNNConfig(name="CGCNN")
+    ):
+
+        graphs = [Graph.atom_dgl_multigraph(s,
+                                               neighbor_strategy=config.neighbor_strategy,
+                                               cutoff=config.cutoff,
+                                               atom_features="atomic_number",
+                                               max_neighbors=config.max_neighbors,
+                                               use_canonize=config.use_canonize,
+                                               compute_line_graph=False) for s in tqdm(structures)]
+        self.graphs = graphs
+        self.target = targets
+        self.ids = ids
+
+        self.labels = torch.tensor(targets).type(
+            torch.get_default_dtype()
+        )
+
+
+    @staticmethod
+    def _get_attribute_lookup(atom_features: str = "cgcnn"):
+        """Build a lookup array indexed by atomic number."""
+        max_z = max(v["Z"] for v in chem_data.values())
+
+        # get feature shape (referencing Carbon)
+        if atom_features == "mat2vec":
+            id_prop_file = "mat2vec.csv"
+            path = Path(__file__).parent.parent / 'data' / id_prop_file
+            return pd.read_csv(path).to_numpy()[:, 1:].astype("float32")
+        else:
+            template = get_node_attributes("C", atom_features)
+            features = np.zeros((1 + max_z, len(template)))
+
+            for element, v in chem_data.items():
+                z = v["Z"]
+                x = get_node_attributes(element, atom_features)
+
+                if x is not None:
+                    features[z, :] = x
+
         return features
+
+    def __len__(self):
+        """Get length."""
+        return self.labels.shape[0]
+
+    def __getitem__(self, idx):
+        """Get StructureDataset sample."""
+        g = self.graphs[idx]
+        label = self.labels[idx]
+
+        return g, label
+
+    @staticmethod
+    def collate_fn(
+            samples: List[Tuple[Data, torch.Tensor]]
+    ):
+        """Dataloader helper to batch graphs cross `samples`."""
+        graphs, labels = map(list, zip(*samples))
+        batched_graph = dgl.batch(graphs)
+
+        if len(labels[0].size()) > 0:
+            return batched_graph, torch.stack(labels)
+        else:
+            return batched_graph, torch.tensor(labels)
+
+    @staticmethod
+    def prepare_batch(batch: Tuple[dgl.graph, torch.Tensor], device=None, non_blocking=False, subset=None):
+        g, t = batch
+        if subset is not None:
+            g = dgl.batch(dgl.unbatch(g)[:subset])
+            return g.to(device=device, non_blocking=non_blocking), t[:subset].to(device=device, non_blocking=non_blocking)
+
+        return g.to(device, non_blocking=non_blocking), t.to(device, non_blocking=non_blocking)

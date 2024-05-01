@@ -3,7 +3,7 @@ import pickle
 import pprint
 import random
 import time
-from functools import reduce
+from functools import reduce, partial
 from typing import Union, Dict
 
 import numpy as np
@@ -18,7 +18,8 @@ from jarvis.db.jsonutils import loadjson
 import argparse
 import os
 
-from crakn.core.data import PretrainCrAKNDataset, convert_to_pretrain_dataset
+from crakn.core.data import PretrainCrAKNDataset, convert_to_pretrain_dataset, prepare_crakn_batch, \
+    create_test_dataloader
 from crakn.core.model import CrAKN
 from crakn.train import setup_optimizer
 from crakn.utils import mae, mse, rmse, Normalizer, AverageMeter
@@ -36,7 +37,7 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument(
-    "--config_name",
+    "--config",
     default="",
     help="Name of the config file",
 )
@@ -54,10 +55,9 @@ parser.add_argument(
 )
 
 
-
 def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_predictions=False):
     import os
-    suffix = f"{config.base_config.backbone}_{config.dataset}_{config.target}"
+    suffix = f"{config.base_config.backbone}_{config.dataset}_{'_'.join(config.target)}"
     model_file = f"model_{suffix}"
     dataloader_file = f"dataloader_{suffix}"
     id_file = f"train_test_ids_{suffix}.json"
@@ -70,7 +70,8 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
     with open(dataloader_path, "rb") as f:
         train_loader, val_loader, test_loader = pickle.load(f)
 
-    train_loader, val_loader, test_loader = convert_to_pretrain_dataset(vlm, train_loader, val_loader, test_loader, config)
+    #train_loader, val_loader, test_loader = convert_to_pretrain_dataset(vlm, train_loader, val_loader, test_loader,
+    #                                                                    config)
 
     with open(train_test_id_path, "r") as f:
         train_test_ids = json.load(f)
@@ -83,7 +84,8 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
 
     tmp = config.dict()
     f = open(os.path.join(config.output_dir,
-                          f"config_crakn_{config.base_config.backbone}_{config.dataset}_{config.target}.json"), "w")
+                          f"config_crakn_{config.base_config.backbone}_{config.dataset}_{'_'.join(config.target)}.json"),
+             "w")
     f.write(json.dumps(tmp, indent=4))
     f.close()
 
@@ -123,11 +125,15 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
         "validation": {m: [] for m in metrics.keys()},
     }
 
-    sample_targets = torch.concat([data[-1] for data in tqdm(train_loader, "Normalizing..")], dim=0)
+    sample_targets = torch.concat([data[-1][config.mo_target_index] for data in tqdm(train_loader, "Normalizing..")], dim=0)
     normalizer = Normalizer(sample_targets)
 
+    prepare_batch = partial(prepare_crakn_batch, device=device,
+                            internal_prepare_batch=train_loader.dataset.data.prepare_batch,
+                            variable=config.variable_batch_size)
+
+
     # train the model!
-    torch.autograd.set_detect_anomaly(True)
     for epoch in range(config.epochs):
         batch_time = AverageMeter()
         data_time = AverageMeter()
@@ -137,7 +143,9 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
         net.train()
         for step, dat in enumerate(train_loader):
             if config.base_config.mtype == "Transformer":
-                nf, amds, latt, ids, target = dat
+                X, target = prepare_batch(dat)
+                target = target[:, config.mo_target_index, None]
+
                 samples = random.randint(2, config.batch_size)
                 if config.variable_batch_size:
                     nf = nf[:samples]
@@ -147,8 +155,7 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
                     target = target[:samples]
 
                 target_normed = normalizer.norm(target).to(device)
-                train_inputs = (nf.to(device), target_normed), amds.to(device), latt.to(device), ids
-                output = net(train_inputs, direct=True)
+                output = net(X, pretrained=True)
                 loss = criterion(output, target_normed)
             else:
                 g, original_ids, node_ids, ids, target = dat
@@ -187,34 +194,19 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
     predictions = []
 
     with torch.no_grad():
-
         if config.base_config.mtype == "Transformer":
-            neighbor_data = []
-            for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
-                neighbor_node_features, amds, latt, ids, target = dat
-                neighbor_data.append((neighbor_node_features, amds, latt, normalizer.norm(target)))
+            test_data = create_test_dataloader(net, train_loader, test_loader, prepare_batch, config.max_neighbors)
 
-            for dat in tqdm(test_loader, desc="Predicting on test set.."):
-                nf, amds, latt, ids, target = dat
+            for dat in tqdm(test_data, desc="Predicting on test set.."):
+                X_test, target = prepare_batch(dat)
+                target = target[:, config.mo_target_index, None]
 
-                if config.prediction_method == "ensemble":
-                    out_data = []
-                    for neighbor_datum in neighbor_data:
-                        temp_pred = net(
-                            ([nf.to(device), torch.zeros(target.shape).to(device)],
-                             amds.to(device),
-                             latt.to(device),
-                             ids),
-                            neighbors=(datum.to(device) for datum in neighbor_datum),
-                            direct=True
-                        )
-                        out_data.append(temp_pred[-len(ids):])
-                    ensemble_predictions = torch.stack(out_data)
-                    out_data = torch.mean(ensemble_predictions, dim=0).cpu()
-                    target = target.cpu().numpy().flatten().tolist()
-                    pred = normalizer.denorm(out_data).data.numpy().flatten().tolist()
-                    targets.append(target)
-                    predictions.append(pred)
+                temp_pred = net(X_test)
+                prediction = temp_pred[-1:].cpu()
+                pred = normalizer.denorm(prediction).data.numpy().flatten().tolist()
+                target = target.cpu().numpy().flatten().tolist()[-1:]
+                targets.append(target)
+                predictions.append(pred)
         else:
             for dat in tqdm(test_loader, desc="Predicting on test set.."):
                 g, original_ids, node_ids, ids, target = dat
@@ -239,7 +231,7 @@ def train_crakn(model_path: str, config: Union[TrainingConfig, Dict], return_pre
 
         with open("res.txt", "a") as f:
             f.write(
-                f"Test MAE ({config.base_config.backbone}, {config.dataset}, {config.target}, {config.base_config.backbone_only}) :"
+                f"Test MAE ({config.base_config.backbone}, {config.dataset}, {config.target[config.mo_target_index]}) - Pretrained :"
                 f" {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")
 
         resultsfile = os.path.join(
@@ -268,8 +260,8 @@ if __name__ == "__main__":
     import sys
 
     args = parser.parse_args(sys.argv[1:])
-    if args.config_name != "":
-        config = loadjson(args.config_name)
+    if args.config != "":
+        config = loadjson(args.config)
         if args.target != "":
             config["target"] = args.target
     else:

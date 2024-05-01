@@ -135,6 +135,7 @@ class TrainingConfig(BaseSettings):
         "matbench"
     ] = "dft_3d_2021"
     target: List[TARGET_ENUM] = ["exfoliation_energy"]
+    pretrain_target: List[TARGET_ENUM] = ["formation_energy_peratom"]
     atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "mat2vec"
     neighbor_strategy: Literal[
         "k-nearest", "ddg"
@@ -200,6 +201,11 @@ class TrainingConfig(BaseSettings):
         ]
         values.base_config.backbone_config.outputs = len(values.target)
         values.base_config.extra_features = len(values.extra_features)
+        if values.atom_features == "mat2vec":
+            values.composition_features = "cgcnn"
+        else:
+            values.composition_features = "mat2vec"
+
         values.base_config.comp_feat_size = FEATURESET_SIZE[values.composition_features]
         assert values.batch_size > 1
 

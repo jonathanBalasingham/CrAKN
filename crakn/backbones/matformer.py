@@ -10,6 +10,7 @@ from jarvis.core.specie import chem_data, get_node_attributes
 from collections import defaultdict
 from typing import List, Tuple, Sequence, Optional, Literal
 import torch
+from torch.nn.utils.rnn import pad_sequence
 from torch_geometric.data import Data
 from torch_geometric.transforms import LineGraph
 from torch_geometric.data.batch import Batch
@@ -170,19 +171,10 @@ class Matformer(nn.Module):
             )
             self.final = nn.Linear(config.output_features, 1)
 
-        self.link = None
-        self.link_name = config.link
-        if config.link == "identity":
-            self.link = lambda x: x
-        elif config.link == "log":
-            self.link = torch.exp
-            avg_gap = 0.7  # magic number -- average bandgap in dft_3d
-            if not self.zero_inflated:
-                self.fc_out.bias.data = torch.tensor(
-                    np.log(avg_gap), dtype=torch.float
-                )
-        elif config.link == "logit":
-            self.link = torch.sigmoid
+    @staticmethod
+    def pooling(distribution, x):
+        pooled = torch.sum(x, dim=1) / torch.sum(distribution, dim=1)
+        return pooled
 
     def forward(self, data, output_level: Literal["atom", "crystal", "property"] = "crystal") -> torch.Tensor:
         data, ldata, lattice = data
@@ -196,7 +188,12 @@ class Matformer(nn.Module):
             node_features = attn_layer(node_features, data.edge_index, edge_features)
 
         if output_level == "atom":
-            return node_features
+            node_features = torch_geometric.utils.unbatch(node_features, data.batch)
+            node_features = pad_sequence(node_features, batch_first=True)
+            weights = torch.sum(torch.abs(node_features), dim=-1, keepdim=True)
+            weights[weights > 0] = 1
+            return weights, node_features
+
         # crystal-level readout
         features = scatter(node_features, data.batch, dim=0, reduce="mean")
 
@@ -206,11 +203,6 @@ class Matformer(nn.Module):
 
         if output_level == "crystal":
             return out
-
-        if self.link:
-            out = self.link(out)
-        if self.classification:
-            out = self.softmax(out)
 
         return self.final(out)
 

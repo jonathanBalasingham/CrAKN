@@ -39,7 +39,7 @@ from ignite.handlers import Checkpoint, DiskSaver, TerminateOnNan
 from ignite.metrics import Loss, MeanAbsoluteError
 from torch import nn
 
-from crakn.core.data import get_dataloader, retrieve_data, CrAKNDataset, prepare_crakn_batch
+from crakn.core.data import get_dataloader, retrieve_data, CrAKNDataset, prepare_crakn_batch, create_test_dataloader
 from crakn.config import TrainingConfig
 
 from jarvis.db.jsonutils import dumpjson
@@ -301,64 +301,15 @@ def train_crakn(
     with torch.no_grad():
 
         if config.base_config.mtype == "Transformer":
-            neighbor_data = []
-            for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
-                bb_data, amds, latt, ids, target = dat
-                train_inputs = bb_data[0]
-                if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
-                    train_inputs = [i.to(device) for i in train_inputs]
-                else:
-                    train_inputs = train_inputs.to(device)
-                neighbor_node_features = net.backbone(train_inputs)
-                neighbor_data.append((neighbor_node_features, amds, latt, target))
+            test_data = create_test_dataloader(net, train_loader, test_loader, prepare_batch, config.max_neighbors)
 
-            test_data = []
-            for dat in tqdm(test_loader, desc="Generating knowledge network node features.."):
-                bb_data, amds, latt, ids, target = dat
-                train_inputs = bb_data[0]
-                if isinstance(train_inputs, list) or isinstance(train_inputs, tuple):
-                    train_inputs = [i.to(device) for i in train_inputs]
-                else:
-                    train_inputs = train_inputs.to(device)
-                neighbor_node_features = net.backbone(train_inputs)
-                test_data.append((neighbor_node_features, amds, latt, target))
+            for dat in tqdm(test_data, desc="Predicting on test set.."):
+                X_test, target = prepare_batch(dat)
 
-            tree = KDTree(torch.concat([i[0] for i in neighbor_data], dim=0).cpu())
-            test_embeddings = torch.concat([i[0] for i in test_data]).cpu()
-            nearest_neighbor_indices = tree.query(test_embeddings, k=config.max_neighbors)[1]
-            test_data = list(zip(*test_data))
-            test_data = [torch.concat(d, dim=0) for d in test_data]
-            test_data = list(zip(*test_data))
-
-            neighbor_data = list(zip(*neighbor_data))
-            neighbor_data = [torch.concat(d, dim=0) for d in neighbor_data]
-            neighbor_data = list(zip(*neighbor_data))
-
-            for nni, dat in tqdm(zip(nearest_neighbor_indices, test_data), desc="Predicting on test set.."):
-                nf, amds, latt, target = dat
-
-                if nf.dim() < 2:
-                    nf = nf.unsqueeze(0)
-
-                if amds.dim() < 2:
-                    amds = amds.unsqueeze(0)
-
-                neighbor_datum = [neighbor_data[i] for i in nni]
-                neighbor_datum = list(zip(*neighbor_datum))
-                neighbor_datum = [torch.vstack(i) for i in neighbor_datum]
-
-                temp_pred = net(
-                    ([nf.to(device), torch.zeros(bb_data[1].shape).to(device)],
-                     amds.to(device),
-                     latt.to(device),
-                     torch.zeros(len(target))),
-                    neighbors=(datum.to(device) for datum in neighbor_datum),
-                    direct=True
-                )
-                prediction = temp_pred[-len(target):].cpu()
-
+                temp_pred = net(X_test)
+                prediction = temp_pred[-1:].cpu()
                 pred = normalizer.denorm(prediction).data.numpy().flatten().tolist()
-                target = target.cpu().numpy().flatten().tolist()
+                target = target.cpu().numpy().flatten().tolist()[-1:]
                 targets.append(target)
                 predictions.append(pred)
         else:
@@ -372,9 +323,9 @@ def train_crakn(
 
         f.close()
 
-        targets = reduce(lambda x, y: x + y, targets)
+        targets = reduce(lambda x, y: x + y, [i[-1].cpu().numpy().flatten().tolist() for i in test_loader])
         predictions = reduce(lambda x, y: x + y, predictions)
-
+        print(f"Number of Predictions: {len(targets)}, {len(test_loader.dataset)}")
         print("Test MAE:",
               mean_absolute_error(np.array(targets), np.array(predictions)))
 

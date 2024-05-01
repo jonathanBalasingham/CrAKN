@@ -41,10 +41,10 @@ if __name__ == '__main__':
     if args.config != "":
         config = loadjson(args.config)
         if args.target != "":
-            config["target"] = args.target
+            config["target"] = [args.target]
     else:
         if args.target != "":
-            config = TrainingConfig(target=args.target)
+            config = TrainingConfig(target=[args.target])
         else:
             config = TrainingConfig()
     if type(config) is dict:

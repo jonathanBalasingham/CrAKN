@@ -165,7 +165,7 @@ class CrAKN(nn.Module):
             distribution, vertex_features = self.backbone(bb_X, output_level="atom")
 
         if "vertex" in self.components:
-            vertex_features = self.vertex_embedding(vertex_features)
+            vertex_features = self.vertex_embedding(vertex_features, distribution=distribution)
 
         mvf = self.vertex_embedding.pooling(distribution, vertex_features)
 

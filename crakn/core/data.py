@@ -16,6 +16,7 @@ from crakn.backbones.gcn import GCNData
 from crakn.backbones.matformer import MatformerData
 from crakn.backbones.pst import PSTData
 from crakn.backbones.pst_v2 import PSTv2Data
+from crakn.backbones.gnn import GNNData
 from crakn.config import TrainingConfig
 
 from torch.utils.data import Dataset, DataLoader
@@ -34,6 +35,7 @@ DATA_FORMATS = {
     "PST": "pymatgen",
     "Matformer": "jarvis",
     "CGCNN": "jarvis",
+    "GNN": "jarvis",
     "SimpleGCN": "pymatgen",
     "PSTv2": "pymatgen"
 }
@@ -91,6 +93,8 @@ def get_dataset(structures, targets, ids, config):
         return MatformerData(structures, targets, ids, config)
     elif config.name == "CGCNN":
         return CGCNNData(structures, targets, ids, config)
+    elif config.name == "GNN":
+        return GNNData(structures, targets, ids, config)
     else:
         raise NotImplementedError(f"Not implemented yet, {config.name}")
 

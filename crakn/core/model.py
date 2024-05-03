@@ -12,6 +12,7 @@ from ..backbones.pst import PeriodicSetTransformer, PSTConfig
 from ..backbones.matformer import MatformerConfig, Matformer
 from ..backbones.cgcnn import CGCNN, CGCNNConfig
 from ..backbones.pst_v2 import PeriodicSetTransformerV2, PSTv2Config
+from crakn.backbones.gnn import GNN, GNNConfig
 
 
 COMPONENTS = Literal[
@@ -22,7 +23,7 @@ COMPONENTS = Literal[
 
 class CrAKNConfig(BaseSettings):
     name: Literal["crakn"]
-    backbone: Literal["PST", "SimpleGCN", "Matformer", "PSTv2", "CGCNN"] = "PST"
+    backbone: Literal["PST", "SimpleGCN", "Matformer", "PSTv2", "CGCNN", "GNN"] = "PST"
     mtype: Literal["Transformer", "GNN"] = "GNN"
     backbone_config: Union[
         PSTConfig,
@@ -30,6 +31,7 @@ class CrAKNConfig(BaseSettings):
         MatformerConfig,
         PSTv2Config,
         CGCNNConfig,
+        GNNConfig,
     ] = PSTConfig(name="PST")
     components: List[COMPONENTS] = ["vertex", "metavertex", "metaedge"]
     embedding_dim: int = 128
@@ -60,6 +62,8 @@ def get_backbone(bb: str, bb_config) -> nn.Module:
         return Matformer(bb_config)
     elif bb == "CGCNN":
         return CGCNN(bb_config)
+    elif bb == "GNN":
+        return GNN(bb_config)
     else:
         raise NotImplementedError(f"Unknown backbone: {bb}")
 
@@ -84,9 +88,9 @@ class CrAKNAdaptor(nn.Module):
         self.out = nn.Linear(embedding_dim, output_dim, bias=False)
         self.pooling = pooling
 
-    def forward(self, x):
+    def forward(self, x, distribution=None):
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, distribution=distribution)
 
         x = self.out(x)
         return x

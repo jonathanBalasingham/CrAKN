@@ -165,7 +165,7 @@ class PeriodicSetTransformer(nn.Module):
         self.comp_embedding_layer = nn.Linear(atom_encoding_dim, config.embedding_features)
         self.dropout_layer = nn.Dropout(p=config.dropout)
         self.af = AtomFeaturizer(use_cuda=config.use_cuda, id_prop_file=id_prop_file)
-        self.de = DistanceExpansion(size=config.expansion_size, use_cuda=config.use_cuda)
+        self.de = DistanceExpansion(size=config.expansion_size)
         self.ln = nn.LayerNorm(config.embedding_features)
         self.ln2 = nn.LayerNorm(config.embedding_features)
 

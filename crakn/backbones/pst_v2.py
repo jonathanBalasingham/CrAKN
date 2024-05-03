@@ -171,7 +171,7 @@ class PeriodicSetTransformerV2(nn.Module):
         self.pdd_embedding_layer = nn.Linear(config.k * config.expansion_size, config.embedding_features)
         self.comp_embedding_layer = nn.Linear(atom_encoding_dim, config.embedding_features)
         self.af = AtomFeaturizer(use_cuda=config.use_cuda, id_prop_file=id_prop_file)
-        self.de = DistanceExpansion(size=config.expansion_size, use_cuda=config.use_cuda)
+        self.de = DistanceExpansion(size=config.expansion_size)
         self.ln = nn.LayerNorm(config.embedding_features)
         self.rbf = RBFExpansion(bins=config.bias_expansion)
         self.pos_embedding = nn.Linear(config.bias_expansion, config.embedding_features)
@@ -185,6 +185,7 @@ class PeriodicSetTransformerV2(nn.Module):
                            config.decoder_layers, nn.Mish)
         self.out = nn.Linear(config.embedding_features, config.output_features)
         self.final = nn.Linear(config.output_features, config.outputs)
+
 
     @staticmethod
     def pooling(distribution, x):

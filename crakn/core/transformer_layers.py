@@ -30,15 +30,16 @@ class CrAKNVectorAttention2D(nn.Module):
 
         self.delta_mul = use_multiplier
         self.delta_bias = use_bias
+        self.ln = nn.LayerNorm(embedding_dim)
 
         self.linear_q = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim, bias=qkv_bias),
-            nn.LayerNorm(embedding_dim),
+            #nn.LayerNorm(embedding_dim),
             activation(inplace=True),
         )
         self.linear_k = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim, bias=qkv_bias),
-            nn.LayerNorm(embedding_dim),
+            #nn.LayerNorm(embedding_dim),
             activation(inplace=True),
         )
 
@@ -47,20 +48,23 @@ class CrAKNVectorAttention2D(nn.Module):
         if self.delta_mul:
             self.linear_p_multiplier = nn.Sequential(
                 nn.Linear(embedding_dim, embedding_dim),
-                nn.LayerNorm(embedding_dim),
+                #nn.LayerNorm(embedding_dim),
+                nn.BatchNorm1d(embedding_dim),
                 activation(inplace=True),
                 nn.Linear(embedding_dim, embedding_dim),
             )
         if self.delta_bias:
             self.linear_p_bias = nn.Sequential(
                 nn.Linear(embedding_dim, embedding_dim),
-                nn.LayerNorm(embedding_dim),
+                #nn.LayerNorm(embedding_dim),
+                nn.BatchNorm1d(embedding_dim),
                 activation(inplace=True),
                 nn.Linear(embedding_dim, embedding_dim),
             )
         self.weight_encoding = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim),
-            nn.LayerNorm(embedding_dim),
+            #nn.LayerNorm(embedding_dim),
+            nn.BatchNorm1d(embedding_dim),
             activation(inplace=True),
             nn.Linear(embedding_dim, embedding_dim),
         )

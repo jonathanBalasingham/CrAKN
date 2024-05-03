@@ -74,10 +74,7 @@ class DistanceExpansion(nn.Module):
     def __init__(self, size=5, use_cuda=True):
         super(DistanceExpansion, self).__init__()
         self.size = size
-        if use_cuda:
-            self.starter = torch.Tensor([i for i in range(size)]).cuda()
-        else:
-            self.starter = torch.Tensor([i for i in range(size)])
+        self.register_buffer("starter", torch.Tensor([i for i in range(size)]))
         self.starter /= size
 
     def forward(self, x):

@@ -36,7 +36,7 @@ class GNNConfig(BaseSettings):
     edge_features: int = 40
     embedding_features: int = 256
     output_features: int = embedding_features
-    outputs: int  = 1
+    outputs: int = 1
     neighbor_strategy: str = "k-nearest"
     cutoff: float = 8.0
     max_neighbors: int = 12
@@ -60,65 +60,73 @@ class GNNConv(nn.Module):
         self.node_features = node_features
         self.edge_features = edge_features
         self.return_messages = return_messages
-        self.linear_src = nn.Sequential(
-            nn.Linear(node_features, node_features),
-            nn.Mish(),
+        self.linear_q = nn.Sequential(
             nn.Linear(node_features, node_features)
         )
 
-        self.linear_dst = nn.Sequential(
-            nn.Linear(node_features, node_features),
-            nn.Mish(),
+        self.linear_k = nn.Sequential(
+            nn.Linear(node_features, node_features)
+        )
+
+        self.linear_v = nn.Sequential(
             nn.Linear(node_features, node_features)
         )
 
         self.linear_edge = nn.Sequential(
-            nn.Linear(node_features, node_features),
-            nn.Mish(),
             nn.Linear(node_features, node_features)
         )
 
         self.linear_m = nn.Sequential(
-            nn.Linear(node_features, node_features),
-            nn.Mish(),
             nn.Linear(node_features, node_features)
         )
 
+        self.linear_g = nn.Sequential(
+            nn.Linear(node_features, node_features),
+            nn.Mish()
+        )
+
+        self.final = nn.Sequential(
+            nn.Linear(node_features, node_features),
+            nn.Mish(),
+            nn.LayerNorm(node_features),
+            nn.Linear(node_features, node_features)
+        )
+
+        self.ln = nn.LayerNorm(node_features)
         self.bn_message = nn.BatchNorm1d(node_features)
         self.register_buffer("e", torch.Tensor([e]).float())
         self.register_buffer("epsilon_0", torch.Tensor([epsilon_0]).float())
 
         self.bn = nn.BatchNorm1d(node_features)
+        self.bn2 = nn.BatchNorm1d(node_features)
 
     def forward(
             self,
             g: dgl.DGLGraph,
             node_feats: torch.Tensor,
             edge_feats: torch.Tensor,
-    ) -> torch.Tensor:
+    ):
         g = g.local_var()
 
-        g.ndata["h_src"] = self.linear_src(node_feats)
-        g.ndata["h_dst"] = self.linear_dst(node_feats)
-        edge_feats = self.linear_edge(edge_feats)
+        g.ndata["q"] = self.linear_q(node_feats)
+        g.ndata["k"] = self.linear_k(node_feats)
+        g.ndata["v"] = self.linear_v(node_feats)
 
-        g.apply_edges(fn.u_mul_v("h_src", "h_dst", "h_nodes"))
-        g.edata["h_nodes"] = (g.edata["h_nodes"] * self.e ** 2 /
-                              (4 * torch.pi * self.epsilon_0 * edge_feats * 1e-10))
-        m = self.linear_m(g.edata.pop("h_nodes"))
-        g.edata["m"] = m
+        e = self.linear_edge(edge_feats)
+
+        g.apply_edges(fn.u_sub_v("q", "k", "h_nodes"))
+        g.edata["w"] = dgl.nn.functional.edge_softmax(g, g.edata["h_nodes"] + e)
+        g.apply_edges(fn.u_mul_e("v", "w", "m"))
 
         g.update_all(
             message_func=fn.copy_e("m", "z"),
             reduce_func=fn.sum("z", "h"),
         )
 
-        # final batchnorm
-        #h = self.bn(g.ndata.pop("h"))
         h = g.ndata.pop("h")
-        # residual connection plus nonlinearity
-        out = F.softplus(node_feats + h)
-        return out
+        h = self.final(h + node_feats)
+        h = self.ln(h)
+        return h, edge_feats
 
 
 class GNN(nn.Module):
@@ -148,22 +156,13 @@ class GNN(nn.Module):
             atom_encoding_dim, config.embedding_features
         )
 
+        self.edge_embedding = nn.Linear(
+            config.edge_features, config.embedding_features
+        )
+
         self.conv_layers = nn.ModuleList(
             [
                 GNNConv(config.embedding_features, config.edge_features)
-                for _ in range(config.conv_layers)
-            ]
-        )
-
-        self.ewn = dgl.nn.EdgeWeightNorm()
-
-        self.conv_layers2 = nn.ModuleList(
-            [
-                dgl.nn.pytorch.GatedGCNConv(
-                    config.embedding_features,
-                    config.embedding_features,
-                    config.embedding_features
-                )
                 for _ in range(config.conv_layers)
             ]
         )
@@ -201,13 +200,14 @@ class GNN(nn.Module):
         g = g.local_var()
 
         g.edata["distance"] = torch.norm(g.edata["r"], dim=-1, keepdim=False)
-        edge_features = self.rbf(g.edata["distance"])
+        edge_features = self.rbf(1 / g.edata["distance"])
+        edge_features = self.edge_embedding(edge_features)
 
         v = g.ndata.pop("atom_features")
         node_features = self.atom_embedding(self.af(v))
 
         for conv_layer in self.conv_layers:
-            node_features = conv_layer(g, node_features, edge_features)
+            node_features, edge_features = conv_layer(g, node_features, edge_features)
 
         if output_level == "atom":
             g.ndata["node_features"] = node_features

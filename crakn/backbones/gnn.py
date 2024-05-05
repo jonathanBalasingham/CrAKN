@@ -27,7 +27,6 @@ from scipy.constants import e, epsilon_0
 
 
 class GNNConfig(BaseSettings):
-    """Hyperparameter schema for jarvisdgl.models.cgcnn."""
 
     name: Literal["GNN"]
     atom_encoding: Literal["mat2vec", "cgcnn"] = "mat2vec"
@@ -37,6 +36,7 @@ class GNNConfig(BaseSettings):
     embedding_features: int = 256
     output_features: int = embedding_features
     outputs: int = 1
+    collapse_tol: float = 1e-4
     neighbor_strategy: str = "k-nearest"
     cutoff: float = 8.0
     max_neighbors: int = 12
@@ -45,10 +45,6 @@ class GNNConfig(BaseSettings):
 
 
 class GNNConv(nn.Module):
-    """Xie and Grossman graph convolution function.
-
-    10.1103/PhysRevLett.120.145301
-    """
 
     def __init__(
             self,
@@ -252,8 +248,9 @@ class GNNData(torch.utils.data.Dataset):
     ):
 
         graphs = [ddg(s,
-                      collapse_tol=1e-4,
-                      max_neighbors=config.max_neighbors) for s in tqdm(structures)]
+                      collapse_tol=config.collapse_tol,
+                      max_neighbors=config.max_neighbors,
+                      backward_edges=True) for s in tqdm(structures)]
         self.graphs = graphs
         self.target = targets
         self.ids = ids

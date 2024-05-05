@@ -218,7 +218,7 @@ def dist_graphs(atoms=None,
 def ddg(atoms: Structure,
         max_neighbors: int = 12,
         collapse_tol=1e-4,
-        backward_edges=False):
+        backward_edges=True):
     all_neighbors, neighbor_distances, neighbor_atomic_numbers, final_neighbor_indices = (
         get_neighbors(atoms, max_neighbors=max_neighbors, cutoff=8))
 

@@ -17,7 +17,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch_geometric.data import Data, Batch
 from tqdm import tqdm
 
-from crakn.backbones.graphs import Graph
+from crakn.backbones.graphs import Graph, ddg
 
 # import torch
 from crakn.backbones.utils import RBFExpansion, AtomFeaturizer, DistanceExpansion
@@ -157,6 +157,12 @@ class GNN(nn.Module):
             atom_encoding_dim, config.embedding_features
         )
 
+        self.distance_embedding = nn.Linear(
+            config.max_neighbors, config.embedding_features
+        )
+
+        self.norm = nn.LayerNorm(config.embedding_features)
+
         self.edge_embedding = nn.Linear(
             config.edge_features, config.embedding_features
         )
@@ -173,7 +179,7 @@ class GNN(nn.Module):
         )
 
         self.readout = AvgPooling()
-
+        self.weighted_readout = SumPooling()
         self.fc = nn.Sequential(
             nn.Linear(config.embedding_features, config.embedding_features), nn.Softplus()
         )
@@ -200,12 +206,16 @@ class GNN(nn.Module):
     def forward(self, g, output_level: Literal["atom", "crystal", "property"]) -> torch.Tensor:
         g = g.local_var()
 
-        g.edata["distance"] = torch.norm(g.edata["r"], dim=-1, keepdim=False)
+        if "distance" not in g.edata:
+            g.edata["distance"] = torch.norm(g.edata["r"], dim=-1, keepdim=False)
+
         edge_features = self.de(torch.reciprocal(g.edata["distance"]))
         edge_features = self.edge_embedding(edge_features)
 
         v = g.ndata.pop("atom_features")
         node_features = self.atom_embedding(self.af(v))
+        if "distances" in g.ndata:
+            node_features = self.norm(node_features + self.distance_embedding(g.ndata["distances"]))
 
         for conv_layer in self.conv_layers:
             node_features, edge_features = conv_layer(g, node_features, edge_features)
@@ -219,7 +229,10 @@ class GNN(nn.Module):
             return weights, node_features
 
         # crystal-level readout
-        features = self.readout(g, node_features)
+        if "weights" in g.ndata:
+            features = self.weighted_readout(g, node_features * g.ndata["weights"].reshape((-1, 1)))
+        else:
+            features = self.readout(g, node_features)
 
         if output_level == "crystal":
             return features
@@ -238,13 +251,9 @@ class GNNData(torch.utils.data.Dataset):
             config: GNNConfig = GNNConfig(name="GNN")
     ):
 
-        graphs = [Graph.atom_dgl_multigraph(s,
-                                            neighbor_strategy=config.neighbor_strategy,
-                                            cutoff=config.cutoff,
-                                            atom_features="atomic_number",
-                                            max_neighbors=config.max_neighbors,
-                                            use_canonize=config.use_canonize,
-                                            compute_line_graph=False) for s in tqdm(structures)]
+        graphs = [ddg(s,
+                      collapse_tol=1e-4,
+                      max_neighbors=config.max_neighbors) for s in tqdm(structures)]
         self.graphs = graphs
         self.target = targets
         self.ids = ids

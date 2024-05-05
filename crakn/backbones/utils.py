@@ -79,6 +79,8 @@ class DistanceExpansion(nn.Module):
 
     def forward(self, x):
         out = (1 - (x.flatten().reshape((-1, 1)) - self.starter)) ** 2
+        if x.dim() < 3:
+            return out
         return out.reshape((x.shape[0], x.shape[1], x.shape[2] * self.size))
 
 

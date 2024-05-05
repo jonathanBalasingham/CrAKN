@@ -113,9 +113,10 @@ class GNNConv(nn.Module):
         g.ndata["v"] = self.linear_v(node_feats)
 
         e = self.linear_edge(edge_feats)
+        m = self.linear_m(edge_feats)
 
         g.apply_edges(fn.u_sub_v("q", "k", "h_nodes"))
-        g.edata["w"] = dgl.nn.functional.edge_softmax(g, g.edata["h_nodes"] + e)
+        g.edata["w"] = dgl.nn.functional.edge_softmax(g, m * g.edata["h_nodes"] + e)
         g.apply_edges(fn.u_mul_e("v", "w", "m"))
 
         g.update_all(
@@ -200,7 +201,7 @@ class GNN(nn.Module):
         g = g.local_var()
 
         g.edata["distance"] = torch.norm(g.edata["r"], dim=-1, keepdim=False)
-        edge_features = self.rbf(1 / g.edata["distance"])
+        edge_features = self.de(torch.reciprocal(g.edata["distance"]))
         edge_features = self.edge_embedding(edge_features)
 
         v = g.ndata.pop("atom_features")

@@ -194,6 +194,7 @@ class GNN(nn.Module):
         self.register_buffer("A", torch.Tensor([1.024e-23]).float())
         self.register_buffer("B", torch.Tensor([1.582e-26]).float())
         self.A, self.B = self.A / self.bc, self.B / self.bc
+        self.ln = nn.LayerNorm(config.embedding_features)
 
     def pot(self, r):
         return self.B / r**12 - self.A / r**6

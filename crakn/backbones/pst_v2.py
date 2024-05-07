@@ -12,7 +12,8 @@ from tqdm import tqdm
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
 from .utils import DistanceExpansion, AtomFeaturizer, RBFExpansion
-from .pdd_helpers import custom_PDD, get_relative_vectors
+from .pdd_helpers import custom_PDD, get_relative_vectors, pair_dist
+from kan import KANLayer, KAN
 
 
 class PSTv2Config(BaseSettings):
@@ -67,8 +68,8 @@ class VectorAttention(nn.Module):
             embed_channels,
             attention_dropout=0.0,
             qkv_bias=True,
-            use_multiplier=False,
-            use_bias=False,
+            use_multiplier=True,
+            use_bias=True,
             activation=nn.Mish
     ):
         super(VectorAttention, self).__init__()
@@ -114,19 +115,23 @@ class VectorAttention(nn.Module):
         self.softmax = nn.Softmax(dim=2)
         self.attn_drop = nn.Dropout(attention_dropout)
 
-    def forward(self, feat, pos, distribution):
+    def forward(self, feat, pos, distribution, return_bias=True):
         query, key, value = (
             self.linear_q(feat),
             self.linear_k(feat),
             self.linear_v(feat),
         )
+
         relation_qk = key.unsqueeze(-3) - query.unsqueeze(-2)
+
         if self.delta_mul:
             pem = self.linear_p_multiplier(pos)
             relation_qk = relation_qk * pem
+
         if self.delta_bias:
             peb = self.linear_p_bias(pos)
             relation_qk = relation_qk + peb
+
 
         weight = self.weight_encoding(relation_qk)
         weight = self.attn_drop(weighted_softmax(weight, dim=-2, weights=distribution.unsqueeze(1)))
@@ -134,6 +139,9 @@ class VectorAttention(nn.Module):
         mask = (distribution * distribution.transpose(-1, -2)) > 0
         weight = weight * mask.unsqueeze(-1)
         feat = torch.einsum("b i j k, b j k -> b i k", weight, value)
+
+        if self.delta_bias and return_bias:
+            return feat, relation_qk
         return feat
 
 
@@ -148,13 +156,13 @@ class PeriodicSetTransformerV2Encoder(nn.Module):
         self.ffn = nn.Sequential(nn.Linear(embedding_dim, embedding_dim),
                                  activation())
 
-    def forward(self, x, distribution, pos):
+    def forward(self, x, distribution, pos, return_bias=True):
         x_norm = self.ln(x)
-        att_output = self.vector_attention(x_norm, pos, distribution)
+        att_output, pos = self.vector_attention(x_norm, pos, distribution, return_bias=return_bias)
         output1 = x + self.out(att_output)
         output2 = self.ln(output1)
         output2 = self.ffn(output2)
-        return self.ln(output1 + output2)
+        return self.ln(output1 + output2), pos
 
 
 class PeriodicSetTransformerV2(nn.Module):
@@ -175,6 +183,7 @@ class PeriodicSetTransformerV2(nn.Module):
         self.ln = nn.LayerNorm(config.embedding_features)
         self.rbf = RBFExpansion(bins=config.bias_expansion)
         self.pos_embedding = nn.Linear(config.bias_expansion, config.embedding_features)
+        self.pd_embedding = nn.Linear(config.k * config.expansion_size, config.embedding_features)
 
         self.encoders = nn.ModuleList(
             [PeriodicSetTransformerV2Encoder(config.embedding_features, config.num_heads,
@@ -192,22 +201,22 @@ class PeriodicSetTransformerV2(nn.Module):
         return torch.sum(distribution * x, dim=1)
 
     def forward(self, features, output_level: Literal["atom", "crystal", "property"] = "crystal"):
-        str_fea, comp_fea, cloud_fea = features
+        str_fea, comp_fea, pd = features
         distribution = str_fea[:, :, 0, None]
         str_features = str_fea[:, :, 1:]
 
         comp_features = self.comp_embedding_layer(self.af(comp_fea))
         str_features = self.pdd_embedding_layer(self.de(str_features))
-
+        pd = self.pd_embedding(self.de(pd))
         x = comp_features + str_features
-        pos = cloud_fea.unsqueeze(1) - cloud_fea.unsqueeze(2)
-        pos = torch.norm(pos, dim=-1, keepdim=True)
-        pos = self.rbf(pos).squeeze()
-        pos = self.pos_embedding(pos)
+        #pos = pair_dist.unsqueeze(1) - pair_dist.unsqueeze(2)
+        #pos = torch.norm(pos, dim=-1, keepdim=True)
+        #pos = self.rbf(pos).squeeze()
+        #pos = self.pos_embedding(pos)
 
         x_init = x
         for encoder in self.encoders:
-            x = encoder(x, distribution, pos)
+            x, pd = encoder(x, distribution, pd)
 
         if output_level == "atom":
             return distribution, x
@@ -240,23 +249,23 @@ class PSTv2Data(torch.utils.data.Dataset):
         pdds = []
         periodic_sets = [amd.periodicset_from_pymatgen_structure(s) for s in structures]
         atom_fea = []
-        clouds = []
+        pair_distributions = []
         for ind in tqdm(range(len(periodic_sets)),
                         desc="Creating PDDs…",
                         ascii=False, ncols=75):
             ps = periodic_sets[ind]
-            pdd, groups, inds, cloud = custom_PDD(ps, k=self.k, collapse=True, collapse_tol=self.collapse_tol,
+            pdd, groups, inds, cloud = custom_PDD(ps, k=self.k * ps.motif.shape[0] * 10, collapse=True, collapse_tol=self.collapse_tol,
                                                   constrained=True, lexsort=False)
             indices_in_graph = [i[0] for i in groups]
             atom_features = ps.types[indices_in_graph][:, None]
             atom_fea.append(atom_features)
-            pdds.append(pdd)
+            pdds.append(pdd[:, :self.k+1])
             points = cloud[[i[0] for i in groups]]
-            clouds.append(points)
+            pair_distributions.append(1 / pair_dist(self.k, pdd, groups, inds))
 
         self.pdds = preprocess_pdds(pdds)
         self.atom_fea = atom_fea
-        self.clouds = clouds
+        self.pair_distributions = pair_distributions
 
     def __len__(self):
         return len(self.id_prop_data)
@@ -265,7 +274,7 @@ class PSTv2Data(torch.utils.data.Dataset):
         cif_id, target = self.ids[idx], self.id_prop_data[idx]
         return torch.Tensor(self.pdds[idx]), \
             torch.Tensor(self.atom_fea[idx]), \
-            torch.Tensor(self.clouds[idx]), \
+            torch.Tensor(self.pair_distributions[idx]), \
             torch.Tensor(target), \
             cif_id
 
@@ -286,7 +295,7 @@ class PSTv2Data(torch.utils.data.Dataset):
 
         return (pad_sequence(batch_fea, batch_first=True),
                 pad_sequence(composition_fea, batch_first=True),
-                pad_sequence(batch_clouds, batch_first=True)), \
+                torch.nested.nested_tensor(batch_clouds).to_padded_tensor(0)), \
             torch.stack(batch_target, dim=0), \
             batch_cif_ids
 

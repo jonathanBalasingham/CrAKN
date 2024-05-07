@@ -1,5 +1,7 @@
 import amd
 import collections
+
+import torch
 from scipy.spatial.distance import squareform, pdist
 import numpy as np
 from itertools import permutations, combinations
@@ -102,6 +104,27 @@ def extract_motif_cell(pset: amd.PeriodicSet):
     return motif, cell, asymmetric_unit, weights
 
 
+def pair_dist(k, pdd, groups, inds):
+    map_to_group = {ind: group[0] for group in groups for ind in group}
+    inds_to_keep = [i[0] for i in groups]
+    map_to_base = {j: i for i, j in enumerate(inds_to_keep)}
+    f = np.vectorize(lambda x: map_to_base[map_to_group[x]])
+    neighbor_inds = f(inds[inds_to_keep] % len(map_to_group.values()))
+
+    pair_distances = []
+    for i, n in enumerate(neighbor_inds):
+        distances = [[] for _ in range(len(groups))]
+        completed = set()
+        for j, indx in enumerate(n):
+            if indx not in completed:
+                distances[indx].append(pdd[i][j])
+                if len(distances[indx]) >= k:
+                    completed.add(indx)
+
+        pair_distances.append(distances)
+    return torch.Tensor(pair_distances)
+
+
 def unit_vector(vector, axis=-1):
     return vector / np.linalg.norm(vector, axis=axis)[:, :, :, None]
 
@@ -124,5 +147,6 @@ def get_relative_vectors(groups, cloud, inds):
 if __name__ == "__main__":
     from jarvis.db.figshare import data
     from jarvis.core.atoms import Atoms
+
     d = data('dft_2d')
     ps = amd.periodicset_from_pymatgen_structure(Atoms.from_dict(d[1]['atoms']).pymatgen_converter())

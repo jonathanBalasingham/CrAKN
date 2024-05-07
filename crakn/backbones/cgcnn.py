@@ -167,7 +167,7 @@ class CGCNN(nn.Module):
         pooled = torch.sum(x, dim=1) / torch.sum(distribution, dim=1)
         return pooled
 
-    def forward(self, g, output_level: Literal["atom", "crystal", "property"]) -> torch.Tensor:
+    def forward(self, g, output_level: Literal["atom", "crystal", "property"], node_features=None) -> torch.Tensor:
         """CGCNN function mapping graph to outputs."""
         g = g.local_var()
 
@@ -176,17 +176,21 @@ class CGCNN(nn.Module):
 
         # initial node features: atom feature network...
         v = g.ndata.pop("atom_features")
-        node_features = self.atom_embedding(self.af(v))
+        nf_provided = node_features is not None
+        if not nf_provided:
+            node_features = self.atom_embedding(self.af(v))
 
         # CGCNN-Conv block: update node features
         for conv_layer in self.conv_layers:
             node_features = conv_layer(g, node_features, edge_features)
 
         if output_level == "atom":
+            if nf_provided:
+                return node_features
             g.ndata["node_features"] = node_features
-            node_features = [i.ndata["node_features"] for i in dgl.unbatch(g)]
-            node_features = pad_sequence(node_features, batch_first=True)
-            weights = torch.sum(torch.abs(node_features), dim=-1, keepdim=True)
+            padded_features = [i.ndata["node_features"] for i in dgl.unbatch(g)]
+            padded_features = pad_sequence(padded_features, batch_first=True)
+            weights = torch.sum(torch.abs(padded_features), dim=-1, keepdim=True)
             weights[weights > 0] = 1
             return weights, node_features
 

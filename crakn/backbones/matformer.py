@@ -176,18 +176,22 @@ class Matformer(nn.Module):
         pooled = torch.sum(x, dim=1) / torch.sum(distribution, dim=1)
         return pooled
 
-    def forward(self, data, output_level: Literal["atom", "crystal", "property"] = "crystal") -> torch.Tensor:
+    def forward(self, data, output_level: Literal["atom", "crystal", "property"] = "crystal", node_features=None) -> torch.Tensor:
         data, ldata, lattice = data
         # initial node features: atom feature network...
 
-        node_features = self.atom_embedding(data.x)
+        tnf = node_features is not None
+        if node_features is None:
+            node_features = self.atom_embedding(data.x)
         edge_feat = torch.norm(data.edge_attr, dim=1)
-
         edge_features = self.rbf(edge_feat)
+
         for attn_layer in self.att_layers:
             node_features = attn_layer(node_features, data.edge_index, edge_features)
 
         if output_level == "atom":
+            if tnf:
+                return node_features
             node_features = torch_geometric.utils.unbatch(node_features, data.batch)
             node_features = pad_sequence(node_features, batch_first=True)
             weights = torch.sum(torch.abs(node_features), dim=-1, keepdim=True)

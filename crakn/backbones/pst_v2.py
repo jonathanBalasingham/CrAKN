@@ -12,8 +12,7 @@ from tqdm import tqdm
 from ..utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
 from .utils import DistanceExpansion, AtomFeaturizer, RBFExpansion
-from .pdd_helpers import custom_PDD, get_relative_vectors, pair_dist
-from kan import KANLayer, KAN
+from .pdd_helpers import custom_PDD, pair_dist
 
 
 class PSTv2Config(BaseSettings):

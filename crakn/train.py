@@ -142,8 +142,6 @@ def train_crakn(
     if not os.path.exists(output_path):
         os.makedirs(output_path)
 
-    checkpoint_dir = os.path.join(output_path)
-    deterministic = False
     classification = False
 
     tmp = config.dict()
@@ -278,7 +276,7 @@ def train_crakn(
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if epoch % 25 == 0 and step % 25 == 0:
+            if epoch % 5 == 0 and step % 25 == 0:
                 for i, t in enumerate(config.target):
                     print('Target: {target}\t\t'
                           'Epoch: [{0}][{1}/{2}]\t'

@@ -10,34 +10,19 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from crakn.core.model import CrAKN
-from crakn.utils import Normalizer, AverageMeter, mae, mse, rmse
+from crakn.utils import Normalizer, AverageMeter, mae, mse, rmse, count_parameters
 
 try:
     from ignite.contrib.handlers.stores import EpochOutputStore
 except Exception:
     from ignite.handlers.stores import EpochOutputStore
-
     pass
 
-from ignite.handlers import EarlyStopping
-from ignite.contrib.handlers.tqdm_logger import ProgressBar
-from ignite.engine import (
-    Events,
-    create_supervised_evaluator,
-    create_supervised_trainer,
-)
-from ignite.contrib.metrics import ROC_AUC, RocCurve
-from ignite.metrics import (
-    Accuracy,
-    Precision,
-    Recall,
-    ConfusionMatrix,
-)
 import pickle as pk
 import numpy as np
-from ignite.handlers import Checkpoint, DiskSaver, TerminateOnNan
 from ignite.metrics import Loss, MeanAbsoluteError
 from torch import nn
+from prettytable import PrettyTable
 
 from crakn.core.data import get_dataloader, retrieve_data, CrAKNDataset, prepare_crakn_batch, create_test_dataloader
 from crakn.config import TrainingConfig
@@ -195,6 +180,11 @@ def train_crakn(
     else:
         net = model
 
+    if config.base_config.backbone_only:
+        num_parameters = count_parameters(net.backbone)
+    else:
+        num_parameters = count_parameters(net)
+
     net.to(device)
 
     # group parameters to skip weight decay for bias and batchnorm
@@ -335,7 +325,7 @@ def train_crakn(
         with open("res.txt", "a") as f:
             f.write(
                 f"Test MAE ({config.base_config.backbone}, {config.dataset}, {config.target}, {config.base_config.backbone_only}) :"
-                f" {str(mean_absolute_error(np.array(targets), np.array(predictions)))} \n")
+                f" {str(mean_absolute_error(np.array(targets), np.array(predictions)))} ({num_parameters}) \n")
 
         resultsfile = os.path.join(
             config.output_dir, "crakn_prediction_results_test_set.csv"

@@ -1,7 +1,10 @@
 import csv
 import os
+import pickle
 
 import torch
+from tqdm import tqdm
+
 from crakn.config import TrainingConfig
 from crakn.core.data import DATA_FORMATS, CrAKNDataset, get_dataloader
 from crakn.train import train_crakn
@@ -34,61 +37,76 @@ parser.add_argument(
     help="Location of CIF files"
 )
 
+parser.add_argument(
+    "--cache",
+    default=True,
+    help="Write or read to cache",
+)
 
-def train_folder(config: TrainingConfig, folder_path: str):
+
+def train_folder(config: TrainingConfig, folder_path: str, cache: bool):
     id_prop_file = os.path.join(folder_path, "id_prop.csv")
     with open(id_prop_file, "r") as f:
         reader = csv.reader(f)
         data = [row for row in reader]
 
-    files = os.listdir(folder_path)
-    for file in files:
-        ext = os.path.basename(file).split(".")[-1]
-        if ext == "csv":
-            pass
-        else:
-            file_format = ext
-            break
+    cache_path = os.path.join(folder_path, "cache_structures")
+    dataloader_path = os.path.join(folder_path, "dataloaders")
+    if os.path.exists(dataloader_path) and cache:
+        print(f"Using cache file: {dataloader_path}")
+        train_loader, val_loader, test_loader = pickle.load(open(dataloader_path, "rb"))
+        history = train_crakn(config, dataloaders=(train_loader, val_loader, test_loader))
+        return history
+    else:
+        files = os.listdir(folder_path)
+        for file in files:
+            ext = os.path.basename(file).split(".")[-1]
+            if ext == "csv":
+                pass
+            else:
+                file_format = ext
+                break
 
-    print(f"Using file format: {file_format}")
-    structures = []
-    ids = []
-    targets = []
+        print(f"Using file format: {file_format}")
+        structures = []
+        ids = []
+        targets = []
 
-    for i in data:
-        file_name = i[0]
-        if not file_name.endswith(file_format):
-            file_name += f".{file_format}"
-        file_path = os.path.join(folder_path, file_name)
-        if file_format == "poscar":
-            atoms = Atoms.from_poscar(file_path)
-        elif file_format == "cif":
-            atoms = Atoms.from_cif(file_path, use_cif2cell=False)
-        elif file_format == "xyz":
-            atoms = Atoms.from_xyz(file_path, box_size=500)
-        elif file_format == "pdb":
-            atoms = Atoms.from_pdb(file_path, max_lat=500)
-        else:
-            raise NotImplementedError(
-                "File format not implemented", file_format
-            )
+        for i in tqdm(data, desc="Reading files from folders.."):
+            file_name = i[0]
+            if not file_name.endswith(file_format):
+                file_name += f".{file_format}"
+            file_path = os.path.join(folder_path, file_name)
+            if file_format == "poscar":
+                atoms = Atoms.from_poscar(file_path)
+            elif file_format == "cif":
+                atoms = Atoms.from_cif(file_path, use_cif2cell=False)
+            elif file_format == "xyz":
+                atoms = Atoms.from_xyz(file_path, box_size=500)
+            elif file_format == "pdb":
+                atoms = Atoms.from_pdb(file_path, max_lat=500)
+            else:
+                raise NotImplementedError(
+                    "File format not implemented", file_format
+                )
 
-        if DATA_FORMATS[config.base_config.backbone] == "pymatgen":
-            structure = atoms.pymatgen_converter()
-            structures.append(structure)
-        elif DATA_FORMATS[config.base_config.backbone] == "jarvis":
-            structures.append(atoms)
+            if DATA_FORMATS[config.base_config.backbone] == "pymatgen":
+                structure = atoms.pymatgen_converter()
+                structures.append(structure)
+            elif DATA_FORMATS[config.base_config.backbone] == "jarvis":
+                structures.append(atoms)
 
-        ids.append(file_name)
+            ids.append(file_name)
 
-        tmp = [float(j) for j in i[1:]]
-        if len(tmp) == 1:
-            tmp = tmp[0]
+            tmp = [float(j) for j in i[1:]]
+            targets.append(tmp)
 
-        targets.append(tmp)
+        pickle.dump((structures, targets, ids), open(cache_path, "wb"))
 
     dataset = CrAKNDataset(structures, targets, ids, config)
     train_loader, val_loader, test_loader = get_dataloader(dataset, config)
+    if not os.path.exists(dataloader_path):
+        pickle.dump((train_loader, val_loader, test_loader), open(dataloader_path, "wb"))
     history = train_crakn(config, dataloaders=(train_loader, val_loader, test_loader))
     return history
 
@@ -107,4 +125,4 @@ if __name__ == '__main__':
         except Exception as exp:
             print("Check", exp)
 
-    train_folder(config, args.folder)
+    train_folder(config, args.folder, cache=args.cache)

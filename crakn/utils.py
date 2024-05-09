@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Union
 import matplotlib.pyplot as plt
 import numpy as np
+from prettytable import PrettyTable
 
 from pydantic_settings import BaseSettings as PydanticBaseSettings
 from pydantic import ConfigDict
@@ -41,6 +42,18 @@ def plot_learning_curve(
 
     return train, val
 
+def count_parameters(model):
+    table = PrettyTable(["Modules", "Parameters"])
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        params = parameter.numel()
+        table.add_row([name, params])
+        total_params += params
+    print(table)
+    print(f"Total Trainable Params: {total_params}")
+    return total_params
 
 def nanvar(tensor, dim=None, keepdim=False):
     tensor_mean = tensor.nanmean(dim=dim, keepdim=True)

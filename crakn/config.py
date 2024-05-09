@@ -138,7 +138,7 @@ class TrainingConfig(BaseSettings):
     pretrain_target: List[TARGET_ENUM] = ["formation_energy_peratom"]
     atom_features: Literal["basic", "atomic_number", "cfid", "cgcnn", "mat2vec"] = "mat2vec"
     neighbor_strategy: Literal[
-        "k-nearest", "ddg"
+        "k-nearest", "ddg", "mdg"
     ] = "k-nearest"
     id_tag: Literal["jid", "id", "_oqmd_entry_id"] = "jid"
     prediction_method: Literal["single", "ensemble"] = "ensemble"

@@ -18,7 +18,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch_geometric.data import Data, Batch
 from tqdm import tqdm
 
-from crakn.backbones.graphs import Graph, ddg
+from crakn.backbones.graphs import Graph, ddg, mdg
 
 # import torch
 from crakn.backbones.utils import RBFExpansion, AtomFeaturizer, DistanceExpansion
@@ -28,8 +28,6 @@ from scipy.constants import e, epsilon_0
 
 
 class GNNConfig(BaseSettings):
-    """Hyperparameter schema for jarvisdgl.models.cgcnn."""
-
     name: Literal["GNN"]
     atom_encoding: Literal["mat2vec", "cgcnn"] = "mat2vec"
     conv_layers: int = 3
@@ -38,7 +36,7 @@ class GNNConfig(BaseSettings):
     embedding_features: int = 256
     output_features: int = embedding_features
     outputs: int = 1
-    neighbor_strategy: str = "k-nearest"
+    neighbor_strategy: Literal["ddg", "mdg"] = "mdg"
     cutoff: float = 8.0
     max_neighbors: int = 12
     use_canonize: bool = False
@@ -160,9 +158,15 @@ class GNN(nn.Module):
 
         self.norm = nn.LayerNorm(config.embedding_features)
 
-        self.edge_embedding = nn.Linear(
-            config.edge_features, config.embedding_features
-        )
+        if config.neighbor_strategy == "mdg":
+            print("using mdg")
+            self.edge_embedding = nn.Linear(
+                config.edge_features * 4, config.embedding_features
+            )
+        else:
+            self.edge_embedding = nn.Linear(
+                config.edge_features, config.embedding_features
+            )
 
         #self.conv_layers = nn.ModuleList(
         #    [
@@ -214,10 +218,18 @@ class GNN(nn.Module):
     def forward(self, g, output_level: Literal["atom", "crystal", "property"]) -> torch.Tensor:
         g = g.local_var()
 
-        if "distance" not in g.edata:
+        if "r" in g.edata:
             g.edata["distance"] = torch.norm(g.edata["r"], dim=-1, keepdim=False)
 
-        edge_features = self.de(torch.reciprocal(g.edata["distance"]))
+        if "moments" in g.edata:
+            distances = self.de(torch.reciprocal(g.edata["moments"][:, 0]))
+            devs = self.de(g.edata["moments"][:, 1])
+            maxes = self.de(torch.reciprocal(g.edata["moments"][:, 2]))
+            mins = self.de(torch.reciprocal(g.edata["moments"][:, 3]))
+            edge_features = torch.cat([distances, devs, maxes, mins], dim=1)
+        else:
+            edge_features = self.de(torch.reciprocal(g.edata["distance"]))
+
         edge_features = self.edge_embedding(edge_features)
 
         v = g.ndata.pop("atom_features")
@@ -259,10 +271,15 @@ class GNNData(torch.utils.data.Dataset):
             config: GNNConfig = GNNConfig(name="GNN")
     ):
 
-        graphs = [ddg(s,
-                      collapse_tol=1e-4,
-                      max_neighbors=config.max_neighbors)
-                  for s in tqdm(structures, desc="Creating graphs..")]
+        if config.neighbor_strategy == "mdg":
+            graphs = [mdg(s,
+                          max_neighbors=config.max_neighbors)
+                      for s in tqdm(structures, desc=f"Creating {config.neighbor_strategy} graphs..")]
+        else:
+            graphs = [ddg(s,
+                          max_neighbors=config.max_neighbors)
+                      for s in tqdm(structures, desc=f"Creating {config.neighbor_strategy} graphs..")]
+
         self.graphs = graphs
         self.target = targets
         self.ids = ids
@@ -270,7 +287,6 @@ class GNNData(torch.utils.data.Dataset):
         self.labels = torch.tensor(targets).type(
             torch.get_default_dtype()
         )
-
 
     @staticmethod
     def _get_attribute_lookup(atom_features: str = "cgcnn"):

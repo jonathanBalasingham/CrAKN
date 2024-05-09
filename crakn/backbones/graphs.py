@@ -333,9 +333,13 @@ def mdg(atoms: Structure,
         v = np.concatenate([v, u])
         u = u2
         dists = np.concatenate([dists, dists])
+        deviations = np.concatenate([deviations, deviations])
+        maxes = np.concatenate([maxes, maxes])
+        mins = np.concatenate([mins, mins])
 
     g = dgl.graph((u, v))
-    g.edata["distance"] = torch.tensor(dists).type(torch.get_default_dtype())
+    edge_features = np.hstack([dists[:, None], deviations[:, None], maxes[:, None], mins[:, None]])
+    g.edata["moments"] = torch.tensor(edge_features).type(torch.get_default_dtype())
     g.ndata["weights"] = torch.tensor(weights).type(torch.get_default_dtype())
     g.edata["edge_weights"] = torch.tensor(edge_weights).type(torch.get_default_dtype())
     g.ndata["atom_features"] = torch.tensor(atom_types).type(torch.get_default_dtype())

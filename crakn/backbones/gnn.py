@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from dgl.nn import AvgPooling
+from dgl.nn.pytorch.conv import PNAConv
 from typing import Literal
 
 from dgl.nn.pytorch import SumPooling
@@ -27,6 +28,7 @@ from scipy.constants import e, epsilon_0
 
 
 class GNNConfig(BaseSettings):
+    """Hyperparameter schema for jarvisdgl.models.cgcnn."""
 
     name: Literal["GNN"]
     atom_encoding: Literal["mat2vec", "cgcnn"] = "mat2vec"
@@ -36,7 +38,6 @@ class GNNConfig(BaseSettings):
     embedding_features: int = 256
     output_features: int = embedding_features
     outputs: int = 1
-    collapse_tol: float = 1e-4
     neighbor_strategy: str = "k-nearest"
     cutoff: float = 8.0
     max_neighbors: int = 12
@@ -163,9 +164,20 @@ class GNN(nn.Module):
             config.edge_features, config.embedding_features
         )
 
+        #self.conv_layers = nn.ModuleList(
+        #    [
+        #        GNNConv(config.embedding_features, config.edge_features)
+        #        for _ in range(config.conv_layers)
+        #    ]
+        #)
+
         self.conv_layers = nn.ModuleList(
             [
-                GNNConv(config.embedding_features, config.edge_features)
+                PNAConv(config.embedding_features,
+                        config.embedding_features,
+                        ['mean', 'var', 'min', 'max'],
+                        ['identity', 'attenuation'],
+                        np.log(config.max_neighbors + 1))
                 for _ in range(config.conv_layers)
             ]
         )
@@ -190,7 +202,6 @@ class GNN(nn.Module):
         self.register_buffer("A", torch.Tensor([1.024e-23]).float())
         self.register_buffer("B", torch.Tensor([1.582e-26]).float())
         self.A, self.B = self.A / self.bc, self.B / self.bc
-        self.ln = nn.LayerNorm(config.embedding_features)
 
     def pot(self, r):
         return self.B / r**12 - self.A / r**6
@@ -215,7 +226,7 @@ class GNN(nn.Module):
             node_features = self.norm(node_features + self.distance_embedding(g.ndata["distances"]))
 
         for conv_layer in self.conv_layers:
-            node_features, edge_features = conv_layer(g, node_features, edge_features)
+            node_features = conv_layer(g, node_features, edge_feat=edge_features)
 
         if output_level == "atom":
             g.ndata["node_features"] = node_features
@@ -249,9 +260,9 @@ class GNNData(torch.utils.data.Dataset):
     ):
 
         graphs = [ddg(s,
-                      collapse_tol=config.collapse_tol,
-                      max_neighbors=config.max_neighbors,
-                      backward_edges=True) for s in tqdm(structures)]
+                      collapse_tol=1e-4,
+                      max_neighbors=config.max_neighbors)
+                  for s in tqdm(structures, desc="Creating graphs..")]
         self.graphs = graphs
         self.target = targets
         self.ids = ids

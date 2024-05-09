@@ -272,6 +272,77 @@ def ddg(atoms: Structure,
     return g
 
 
+def mdg(atoms: Structure,
+        max_neighbors: int = 12,
+        backward_edges=True):
+    all_neighbors, neighbor_distances, neighbor_atomic_numbers, final_neighbor_indices = (
+        get_neighbors(atoms, max_neighbors=max_neighbors, cutoff=8))
+
+    all_neighbors = [[all_neighbors[i][j] for j in ind] for i, ind in enumerate(final_neighbor_indices)]
+    an = np.array(atoms.atomic_numbers)
+
+    atomic_num_mat = np.vstack(
+        [[neighbor_atomic_numbers[i][j] for j in ind] for i, ind in enumerate(final_neighbor_indices)])
+    psuedo_pdd = np.vstack(
+        [[neighbor_distances[i][j] for j in ind] for i, ind in enumerate(final_neighbor_indices)])
+
+    g_types_match = pdist(an.reshape((-1, 1))) == 0
+    g_neighbors_match = (pdist(atomic_num_mat) == 0)
+    collapsable = g_types_match & g_neighbors_match
+    groups = _collapse_into_groups(collapsable)
+    group_map = {g: i for i, group in enumerate(groups) for g in group}
+
+    idx_to_keep = set([group[0] for group in groups])
+    atom_types = [an[group[0]] for group in groups]
+
+    m = len(all_neighbors)
+    weights = np.full((m,), 1 / m, dtype=np.float64)
+    weights = np.array([np.sum(weights[group]) for group in groups])
+    dists = np.array(
+        [np.average(psuedo_pdd[group][:, :max_neighbors], axis=0) for group in groups],
+        dtype=np.float64
+    ).reshape(-1)
+
+    deviations = np.array(
+        [np.std(psuedo_pdd[group][:, :max_neighbors], axis=0) for group in groups],
+        dtype=np.float64
+    ).reshape(-1)
+
+    maxes = np.array(
+        [np.max(psuedo_pdd[group][:, :max_neighbors], axis=0) for group in groups],
+        dtype=np.float64
+    ).reshape(-1)
+
+    mins = np.array(
+        [np.min(psuedo_pdd[group][:, :max_neighbors], axis=0) for group in groups],
+        dtype=np.float64
+    ).reshape(-1)
+
+    pdd = dists.reshape(len(groups), max_neighbors)
+    edge_weights = np.repeat(np.array(weights).reshape((-1, 1)), max_neighbors)
+    edge_weights = edge_weights / edge_weights.sum()
+    u = [group_map[n[0]] for i, neighbors in enumerate(all_neighbors) for n in neighbors[:max_neighbors] if
+         i in idx_to_keep]
+    v = [group_map[n[1]] for i, neighbors in enumerate(all_neighbors) for n in neighbors[:max_neighbors] if
+         i in idx_to_keep]
+
+    if backward_edges:
+        edge_weights = np.concatenate([edge_weights, edge_weights])
+        edge_weights = edge_weights / edge_weights.sum()
+        u2 = np.concatenate([u, v])
+        v = np.concatenate([v, u])
+        u = u2
+        dists = np.concatenate([dists, dists])
+
+    g = dgl.graph((u, v))
+    g.edata["distance"] = torch.tensor(dists).type(torch.get_default_dtype())
+    g.ndata["weights"] = torch.tensor(weights).type(torch.get_default_dtype())
+    g.edata["edge_weights"] = torch.tensor(edge_weights).type(torch.get_default_dtype())
+    g.ndata["atom_features"] = torch.tensor(atom_types).type(torch.get_default_dtype())
+    g.ndata["distances"] = torch.tensor(pdd).type(torch.get_default_dtype())
+    return g
+
+
 def nearest_neighbor_edges(
         atoms=None,
         cutoff=8,

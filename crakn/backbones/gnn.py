@@ -142,9 +142,6 @@ class GNN(nn.Module):
             id_prop_file = "mat2vec.csv" if config.atom_encoding == "mat2vec" else "atom_init.json"
 
         self.rbf = RBFExpansion(vmin=0, vmax=1.0, bins=config.edge_features)
-        self.abf = RBFExpansion(
-            vmin=-np.pi / 2, vmax=np.pi / 2, bins=config.edge_features
-        )
 
         self.af = AtomFeaturizer(
             use_cuda=torch.cuda.is_available(),
@@ -162,21 +159,9 @@ class GNN(nn.Module):
         self.norm = nn.LayerNorm(config.embedding_features)
         self.wbn = WeightedBatchNorm1d(config.embedding_features)
 
-        if config.neighbor_strategy == "mdg":
-            self.edge_embedding = nn.Linear(
-                config.edge_features, config.embedding_features
-            )
-        else:
-            self.edge_embedding = nn.Linear(
-                config.edge_features, config.embedding_features
-            )
-
-        #self.conv_layers = nn.ModuleList(
-        #    [
-        #        GNNConv(config.embedding_features, config.edge_features)
-        #        for _ in range(config.conv_layers)
-        #    ]
-        #)
+        self.edge_embedding = nn.Linear(
+            config.edge_features, config.embedding_features
+        )
 
         self.conv_layers = nn.ModuleList(
             [

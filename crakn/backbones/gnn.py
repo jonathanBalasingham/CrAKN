@@ -42,6 +42,7 @@ class GNNConfig(BaseSettings):
     cutoff: float = 8.0
     max_neighbors: int = 12
     dropout: float = 0.0
+    backwards_edges: bool = True
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
@@ -270,11 +271,13 @@ class GNNData(torch.utils.data.Dataset):
 
         if config.neighbor_strategy == "mdg":
             graphs = [mdg(s,
-                          max_neighbors=config.max_neighbors)
+                          max_neighbors=config.max_neighbors,
+                          backward_edges=config.backwards_edges)
                       for s in tqdm(structures, desc=f"Creating {config.neighbor_strategy} graphs..")]
         else:
             graphs = [ddg(s,
-                          max_neighbors=config.max_neighbors)
+                          max_neighbors=config.max_neighbors,
+                          backward_edges=config.backwards_edges)
                       for s in tqdm(structures, desc=f"Creating {config.neighbor_strategy} graphs..")]
 
         self.graphs = graphs

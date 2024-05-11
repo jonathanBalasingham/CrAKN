@@ -84,6 +84,18 @@ class DistanceExpansion(nn.Module):
         return out.reshape((*x.shape[:-1], x.shape[-1] * self.size))
 
 
+class GaussianExpansion(nn.Module):
+    def __init__(self, size=5):
+        super(GaussianExpansion, self).__init__()
+        self.size = size
+        self.register_buffer("starter", torch.Tensor([1 / (i + 1) for i in range(size)]))
+        self.starter /= size
+
+    def forward(self, x, v):
+        gamma = 1 / (v.flatten().reshape((-1, 1)) + 1e-8)
+        out = torch.exp(-gamma * (x.flatten().reshape((-1, 1)) - self.starter) ** 2)
+        return out.reshape((*x.shape[:-1], x.shape[-1] * self.size))
+
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 from scipy import special as sp

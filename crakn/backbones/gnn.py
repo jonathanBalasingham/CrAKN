@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 from dgl.nn import AvgPooling
 from dgl.nn.pytorch.conv import PNAConv
+from dgl.nn.pytorch.gt import EGTLayer
 from typing import Literal
 
 from dgl.nn.pytorch import SumPooling
@@ -18,10 +19,11 @@ from torch.nn.utils.rnn import pad_sequence
 from torch_geometric.data import Data, Batch
 from tqdm import tqdm
 
+from crakn.backbones.WeightedBatchNorm1d import WeightedBatchNorm1d
 from crakn.backbones.graphs import Graph, ddg, mdg
 
 # import torch
-from crakn.backbones.utils import RBFExpansion, AtomFeaturizer, DistanceExpansion
+from crakn.backbones.utils import RBFExpansion, AtomFeaturizer, DistanceExpansion, GaussianExpansion
 from crakn.utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
 from scipy.constants import e, epsilon_0
@@ -33,13 +35,13 @@ class GNNConfig(BaseSettings):
     conv_layers: int = 3
     atom_input_features: int = 92
     edge_features: int = 40
-    embedding_features: int = 256
+    embedding_features: int = 128
     output_features: int = embedding_features
     outputs: int = 1
     neighbor_strategy: Literal["ddg", "mdg"] = "mdg"
     cutoff: float = 8.0
     max_neighbors: int = 12
-    use_canonize: bool = False
+    dropout: float = 0.0
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
@@ -157,11 +159,11 @@ class GNN(nn.Module):
         )
 
         self.norm = nn.LayerNorm(config.embedding_features)
+        self.wbn = WeightedBatchNorm1d(config.embedding_features)
 
         if config.neighbor_strategy == "mdg":
-            print("using mdg")
             self.edge_embedding = nn.Linear(
-                config.edge_features * 4, config.embedding_features
+                config.edge_features, config.embedding_features
             )
         else:
             self.edge_embedding = nn.Linear(
@@ -180,8 +182,10 @@ class GNN(nn.Module):
                 PNAConv(config.embedding_features,
                         config.embedding_features,
                         ['mean', 'var', 'min', 'max'],
-                        ['identity', 'attenuation'],
-                        np.log(config.max_neighbors + 1))
+                        ['identity', 'attenuation', 'amplification'],
+                        np.log(config.max_neighbors + 1),
+                        num_towers=1,
+                        dropout=config.dropout)
                 for _ in range(config.conv_layers)
             ]
         )
@@ -190,25 +194,19 @@ class GNN(nn.Module):
             size=config.edge_features,
         )
 
+        self.ge = GaussianExpansion(size=config.edge_features)
+
         self.readout = AvgPooling()
         self.weighted_readout = SumPooling()
         self.fc = nn.Sequential(
-            nn.Linear(config.embedding_features, config.embedding_features), nn.Softplus()
+            nn.Linear(config.embedding_features,
+                      config.embedding_features),
+            nn.Mish()
         )
 
         self.fc_out = nn.Linear(
             config.embedding_features, config.outputs
         )
-
-        self.register_buffer("e", torch.Tensor([e]).float())
-        self.register_buffer("epsilon_0", torch.Tensor([epsilon_0]).float())
-        self.register_buffer("bc", torch.Tensor([1.381e-23]).float())
-        self.register_buffer("A", torch.Tensor([1.024e-23]).float())
-        self.register_buffer("B", torch.Tensor([1.582e-26]).float())
-        self.A, self.B = self.A / self.bc, self.B / self.bc
-
-    def pot(self, r):
-        return self.B / r**12 - self.A / r**6
 
     @staticmethod
     def pooling(distribution, x):
@@ -222,11 +220,10 @@ class GNN(nn.Module):
             g.edata["distance"] = torch.norm(g.edata["r"], dim=-1, keepdim=False)
 
         if "moments" in g.edata:
-            distances = self.de(torch.reciprocal(g.edata["moments"][:, 0]))
-            devs = self.de(g.edata["moments"][:, 1])
-            maxes = self.de(torch.reciprocal(g.edata["moments"][:, 2]))
-            mins = self.de(torch.reciprocal(g.edata["moments"][:, 3]))
-            edge_features = torch.cat([distances, devs, maxes, mins], dim=1)
+            edge_features = self.ge(
+                torch.reciprocal(g.edata["moments"][:, 0][:, None]),
+                g.edata["moments"][:, 1][:, None]
+            )
         else:
             edge_features = self.de(torch.reciprocal(g.edata["distance"]))
 
@@ -238,17 +235,17 @@ class GNN(nn.Module):
             node_features = self.norm(node_features + self.distance_embedding(g.ndata["distances"]))
 
         for conv_layer in self.conv_layers:
-            node_features = conv_layer(g, node_features, edge_feat=edge_features)
+            node_features = conv_layer(g, node_features, edge_features)
 
         if output_level == "atom":
             g.ndata["node_features"] = node_features
-            node_features = [i.ndata["node_features"] for i in dgl.unbatch(g)]
-            node_features = pad_sequence(node_features, batch_first=True)
+            node_features = pad_sequence(
+                [i.ndata["node_features"] for i in dgl.unbatch(g)],
+                batch_first=True)
             weights = torch.sum(torch.abs(node_features), dim=-1, keepdim=True)
             weights[weights > 0] = 1
             return weights, node_features
 
-        # crystal-level readout
         if "weights" in g.ndata:
             features = self.weighted_readout(g, node_features * g.ndata["weights"].reshape((-1, 1)))
         else:

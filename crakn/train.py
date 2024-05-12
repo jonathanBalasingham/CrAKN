@@ -224,7 +224,6 @@ def train_crakn(
         "validation": {m: [] for m in metrics.keys()},
     }
 
-
     # train the model!
     for epoch in range(config.epochs):
         batch_time = AverageMeter()
@@ -236,7 +235,7 @@ def train_crakn(
         for step, dat in enumerate(train_loader):
             X, target = prepare_batch(dat)
             target_normed = normalizer.norm(target).to(device)
-            output = net(X)
+            output = net(X, target_normed)
             loss = torch.zeros(1).to(device)
 
             for i, prop in enumerate(config.target):
@@ -279,70 +278,70 @@ def train_crakn(
                     )
         scheduler.step()
 
+    for i in [3, 6, 9, 12, 24, 36]:
+            net.eval()
+            f = open(os.path.join(output_path, "crakn_prediction_results_test_set.csv"), "w")
+            f.write("id,target,prediction\n")
+            targets = []
+            predictions = []
 
-    net.eval()
-    f = open(os.path.join(output_path, "crakn_prediction_results_test_set.csv"), "w")
-    f.write("id,target,prediction\n")
-    targets = []
-    predictions = []
+            with torch.no_grad():
 
-    with torch.no_grad():
+                if config.base_config.mtype == "Transformer":
+                    test_data = create_test_dataloader(net, train_loader, test_loader, prepare_batch, i)
 
-        if config.base_config.mtype == "Transformer":
-            test_data = create_test_dataloader(net, train_loader, test_loader, prepare_batch, config.max_neighbors)
+                    for dat in tqdm(test_data, desc="Predicting on test set.."):
+                        X_test, target = prepare_batch(dat)
 
-            for dat in tqdm(test_data, desc="Predicting on test set.."):
-                X_test, target = prepare_batch(dat)
+                        temp_pred = net(X_test, normalizer.norm(target))
+                        prediction = temp_pred[-1:].cpu()
+                        pred = normalizer.denorm(prediction).data.numpy().flatten().tolist()
+                        target = target.cpu().numpy().flatten().tolist()[-1:]
+                        targets.append(target)
+                        predictions.append(pred)
+                else:
+                    for dat in tqdm(test_loader, desc="Predicting on test set.."):
+                        g, original_ids, node_ids, ids, target = dat
+                        out_data = net((g.to(device), original_ids.to(device), node_ids.to(device)))
+                        target = target.cpu().numpy().flatten().tolist()
+                        pred = normalizer.denorm(out_data.cpu()).data.numpy().flatten().tolist()
+                        targets.append(target)
+                        predictions.append(pred)
 
-                temp_pred = net(X_test)
-                prediction = temp_pred[-1:].cpu()
-                pred = normalizer.denorm(prediction).data.numpy().flatten().tolist()
-                target = target.cpu().numpy().flatten().tolist()[-1:]
-                targets.append(target)
-                predictions.append(pred)
-        else:
-            for dat in tqdm(test_loader, desc="Predicting on test set.."):
-                g, original_ids, node_ids, ids, target = dat
-                out_data = net((g.to(device), original_ids.to(device), node_ids.to(device)))
-                target = target.cpu().numpy().flatten().tolist()
-                pred = normalizer.denorm(out_data.cpu()).data.numpy().flatten().tolist()
-                targets.append(target)
-                predictions.append(pred)
+                f.close()
 
-        f.close()
+                targets = reduce(lambda x, y: x + y, [i[-1].cpu().numpy().flatten().tolist() for i in test_loader])
+                predictions = reduce(lambda x, y: x + y, predictions)
+                print(f"Number of Predictions: {len(targets)}, {len(test_loader.dataset)}")
+                print("Test MAE:",
+                      mean_absolute_error(np.array(targets), np.array(predictions)))
 
-        targets = reduce(lambda x, y: x + y, [i[-1].cpu().numpy().flatten().tolist() for i in test_loader])
-        predictions = reduce(lambda x, y: x + y, predictions)
-        print(f"Number of Predictions: {len(targets)}, {len(test_loader.dataset)}")
-        print("Test MAE:",
-              mean_absolute_error(np.array(targets), np.array(predictions)))
+                def mad(target):
+                    return torch.mean(torch.abs(target - torch.mean(target)))
 
-        def mad(target):
-            return torch.mean(torch.abs(target - torch.mean(target)))
+                print(f"Test MAD: {mad(torch.Tensor(targets))}")
 
-        print(f"Test MAD: {mad(torch.Tensor(targets))}")
+                with open("res.txt", "a") as f:
+                    f.write(
+                        f"Test MAE ({config.base_config.backbone}, {config.dataset}, {config.target}, {config.base_config.backbone_only}) :"
+                        f" {str(mean_absolute_error(np.array(targets), np.array(predictions)))} ({num_parameters}) \n")
 
-        with open("res.txt", "a") as f:
-            f.write(
-                f"Test MAE ({config.base_config.backbone}, {config.dataset}, {config.target}, {config.base_config.backbone_only}) :"
-                f" {str(mean_absolute_error(np.array(targets), np.array(predictions)))} ({num_parameters}) \n")
+                resultsfile = os.path.join(
+                    config.output_dir, "crakn_prediction_results_test_set.csv"
+                )
 
-        resultsfile = os.path.join(
-            config.output_dir, "crakn_prediction_results_test_set.csv"
-        )
+                model_file = os.path.join(output_path,
+                                          f"full_model_crakn_{config.base_config.backbone}_{config.dataset}_{config.target}")
 
-        model_file = os.path.join(output_path,
-                                  f"full_model_crakn_{config.base_config.backbone}_{config.dataset}_{config.target}")
+                torch.save(net, model_file)
 
-        torch.save(net, model_file)
+            target_vals = np.array(targets, dtype="float").flatten()
+            predictions = np.array(predictions, dtype="float").flatten()
 
-        target_vals = np.array(targets, dtype="float").flatten()
-        predictions = np.array(predictions, dtype="float").flatten()
-
-        with open(resultsfile, "w") as f:
-            print("target,prediction", file=f)
-            for target_val, predicted_val in zip(target_vals, predictions):
-                print(f"{target_val}, {predicted_val}", file=f)
+            with open(resultsfile, "w") as f:
+                print("target,prediction", file=f)
+                for target_val, predicted_val in zip(target_vals, predictions):
+                    print(f"{target_val}, {predicted_val}", file=f)
 
     if return_predictions:
         return history, predictions

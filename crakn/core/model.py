@@ -3,7 +3,7 @@ import random
 import torch
 from torch import nn
 
-from crakn.core.transformer_layers import CrAKNEncoder, CrAKNVectorAttention2D, CrAKNVectorAttention3D
+from crakn.core.transformer_layers import CrAKNEncoder, CrAKNVectorAttention2D, CrAKNVectorAttention3D, CrAKNAttention
 from crakn.utils import BaseSettings
 from typing import Literal, Union, List
 
@@ -104,6 +104,12 @@ class CrAKN(nn.Module):
             bb_config=config.backbone_config
         )
 
+        self.backbones = nn.ModuleList([
+            get_backbone(
+                config.backbone,
+                bb_config=config.backbone_config
+            ) for _ in range(config.layers)])
+
         self.vertex_embedding = CrAKNAdaptor(
             config.backbone_config.output_features,
             config.embedding_dim,
@@ -130,11 +136,6 @@ class CrAKN(nn.Module):
                 attention_dropout=0.1)
             for _ in range(config.layers)])
 
-        self.out = nn.Linear(
-            config.backbone_config.output_features if config.backbone_only else config.embedding_dim,
-            config.output_features
-        )
-
         if self.backbone_only:
             self.backbone_out = nn.Linear(
                 config.backbone_config.output_features,
@@ -146,6 +147,8 @@ class CrAKN(nn.Module):
             config.embedding_dim
         )
 
+        self.ln = nn.LayerNorm(config.embedding_dim)
+
         assert 0 <= config.dropout <= 1
         self.dropout = nn.Dropout(p=config.dropout)
         self.out = nn.Linear(
@@ -153,7 +156,72 @@ class CrAKN(nn.Module):
             config.output_features
         )
 
-    def forward(self, inputs, pretrained=False, return_embeddings=False) -> torch.Tensor:
+        self.linear_q = nn.Linear(config.embedding_dim, config.embedding_dim)
+        self.linear_k = nn.Linear(config.embedding_dim, config.embedding_dim)
+
+        self.layers = nn.ModuleList([
+            CrAKNAttention(
+                config.embedding_dim,
+                config.num_heads,
+                config.head_dim,
+            )
+            for _ in range(config.layers)
+        ])
+
+        self.backbone_out = nn.Linear(
+            config.embedding_dim,
+            config.output_features
+        )
+
+        self.bias_embedding = nn.Linear(
+            config.amd_k,
+            config.embedding_dim
+        )
+
+        self.distance_embedding = nn.Sequential(
+            nn.Linear(1, 1),
+            nn.PReLU()
+        )
+
+    def forward3(self, inputs, pretrained=False, return_embeddings=False):
+        backbone_input, amds, latt, _ = inputs
+        bb_X = backbone_input[:-1]
+        if len(bb_X) == 1:
+            bb_X = bb_X[0]
+
+        bias = self.metaedge_embedding(amds[:, self.metric_comp_size:])
+        d, nf = self.backbone(bb_X, output_level="atom")
+        mvf = self.vertex_embedding.pooling(d, nf)
+
+        for backbone, e in zip(self.backbones, self.metavertex_embedding):
+            d, nf = backbone(bb_X, output_level="atom", node_features=nf)
+            mvf = self.ln(e(self.vertex_embedding.pooling(d, nf), bias=bias) + mvf)
+
+        if return_embeddings:
+            return mvf
+
+        return self.out(mvf)
+
+    def forward2(self, inputs, pretrained=False, return_embeddings=False):
+        backbone_input, amds, latt, _ = inputs
+        bb_X = backbone_input[:-1]
+        if len(bb_X) == 1:
+            bb_X = bb_X[0]
+
+        bias = self.metaedge_embedding(amds[:, self.metric_comp_size:])
+        mvf = self.backbone(bb_X, output_level="crystal")
+
+        for backbone, e in zip(self.backbones, self.metavertex_embedding):
+            mvf = self.ln(backbone(bb_X, output_level="crystal") + mvf)
+            mvf = self.dropout(e(mvf, bias=bias))
+
+        if return_embeddings:
+            return mvf
+
+        return self.out(mvf)
+
+
+    def forward1(self, inputs, pretrained=False, return_embeddings=False) -> torch.Tensor:
         backbone_input, amds, latt, _ = inputs
         bb_X = backbone_input[:-1]
         if len(bb_X) == 1:
@@ -187,6 +255,80 @@ class CrAKN(nn.Module):
                 mvf = self.dropout(layer(mvf, bias=bias))
 
         return self.out(mvf)
+
+    def forward(self, inputs, targets, return_embeddings=False) -> torch.Tensor:
+        backbone_input, amds, _, _ = inputs
+        bb_X = backbone_input[:-1]
+        if len(bb_X) == 1:
+            bb_X = bb_X[0]
+
+        node_features = self.backbone(bb_X, output_level="crystal")
+
+        if self.backbone_only:
+            return self.out(node_features)
+
+        predictions = self.out(node_features)
+        node_features = self.embedding(node_features)
+        if return_embeddings:
+            return node_features
+
+        edge_features = self.bias_embedding(amds[:, self.metric_comp_size:])
+
+        if not self.training:
+            mask = None
+            q = self.linear_q(node_features[-1:])
+            k = self.linear_k(node_features)
+            targets = targets[:-1]
+            predictions = predictions[-1:]
+            bias = torch.cdist(edge_features[-1:], edge_features)
+        else:
+            num_nodes = node_features.shape[0]
+            mask = torch.concat([-torch.eye(num_nodes, device=node_features.device) + 1,
+                                 torch.eye(num_nodes, device=node_features.device)], dim=1)
+            mask = None
+            q = self.linear_q(node_features)
+            k = self.linear_k(node_features)
+            #k = torch.vstack([k, k])
+            #bias = torch.cdist(edge_features, torch.vstack([edge_features, edge_features]))
+            bias = torch.cdist(edge_features, edge_features)
+
+        for layer in self.layers:
+            #predictions, bias = layer(q, k, torch.vstack([targets, predictions]), bias=bias, mask=mask)
+            predictions, bias = layer(q, k, predictions, bias=bias, mask=mask)
+
+        return predictions
+
+    def forward4(self, inputs, targets, return_embeddings=False) -> torch.Tensor:
+        backbone_input, amds, _, _ = inputs
+        bb_X = backbone_input[:-1]
+        if len(bb_X) == 1:
+            bb_X = bb_X[0]
+
+        nf = self.backbone(bb_X, output_level="crystal")
+
+        if self.backbone_only:
+            return self.out(nf)
+
+        node_features = self.embedding(nf)
+        if return_embeddings:
+            return node_features
+
+        edge_features = amds[:, self.metric_comp_size:]
+        bias = torch.cdist(edge_features, edge_features)
+        bias = self.distance_embedding(bias.unsqueeze(-1)).squeeze(-1)
+        q = self.linear_q(node_features)
+        k = self.linear_k(node_features)
+        for layer in self.layers:
+            node_features, bias = layer(
+                q,
+                k,
+                node_features,
+                bias=bias,
+                mask=-torch.eye(bias.shape[0], device=node_features.device) + 1,
+                embed_value=True
+            )
+
+        return self.out(node_features)
 
 
 if __name__ == '__main__':

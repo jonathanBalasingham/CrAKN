@@ -348,13 +348,13 @@ def create_test_dataloader(net: nn.Module, train_loader, test_loader, prepare_ba
     neighbor_data = []
     for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
         X, target = prepare_batch(dat)
-        neighbor_node_features = net(X, return_embeddings=True)
+        neighbor_node_features = net(X, target, return_embeddings=True)
         neighbor_data.append((neighbor_node_features, X[1], X[2], target))
 
     test_data = []
     for dat in tqdm(test_loader, desc="Generating knowledge network node features.."):
         X, target = prepare_batch(dat)
-        neighbor_node_features = net(X, return_embeddings=True)
+        neighbor_node_features = net(X, target, return_embeddings=True)
         test_data.append((neighbor_node_features, X[1], X[2], target))
 
     tree = KDTree(torch.concat([i[0] for i in neighbor_data], dim=0).cpu())

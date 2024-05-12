@@ -10,6 +10,7 @@ from jarvis.analysis.structure.neighbors import NeighborsAnalysis
 from jarvis.core.specie import chem_data, get_node_attributes
 import math
 from scipy.spatial.distance import pdist, squareform
+from scipy.stats import kurtosis, skew
 import amd
 
 # from jarvis.core.atoms import Atoms
@@ -272,19 +273,61 @@ def ddg(atoms: Structure,
     return g
 
 
+
+class GaussianDistance(object):
+    """
+    Expands the distance by Gaussian basis.
+
+    Unit: angstrom
+    """
+    def __init__(self, dmin, dmax, step, var=None):
+        """
+        Parameters
+        ----------
+
+        dmin: float
+          Minimum interatomic distance
+        dmax: float
+          Maximum interatomic distance
+        step: float
+          Step size for the Gaussian filter
+        """
+        assert dmin < dmax
+        assert dmax - dmin > step
+        self.filter = np.arange(dmin, dmax+step, step)
+        if var is None:
+            var = step
+        self.var = var
+
+    def expand(self, distances):
+        return np.exp(-(distances[..., np.newaxis] - self.filter)**2 /
+                      self.var**2)
+
+
+def create_edge_features(distances, variances, size):
+    filter = np.array([1 / (i + 1) for i in range(size)])
+    gamma = 1 / (variances + 1e-8)
+    return np.exp(-gamma * (distances - filter) ** 2)
+
+
 def mdg(atoms: Structure,
         max_neighbors: int = 12,
         backward_edges=True):
     all_neighbors, neighbor_distances, neighbor_atomic_numbers, final_neighbor_indices = (
         get_neighbors(atoms, max_neighbors=max_neighbors, cutoff=8))
 
-    all_neighbors = [[all_neighbors[i][j] for j in ind] for i, ind in enumerate(final_neighbor_indices)]
-    an = np.array(atoms.atomic_numbers)
+    all_neighbors = [[all_neighbors[i][j] for j in ind]
+                     for i, ind in enumerate(final_neighbor_indices)]
+
+    an = np.array(atoms.atomic_numbers).astype(np.int32)
 
     atomic_num_mat = np.vstack(
-        [[neighbor_atomic_numbers[i][j] for j in ind] for i, ind in enumerate(final_neighbor_indices)])
+        [[neighbor_atomic_numbers[i][j] for j in ind]
+         for i, ind in enumerate(final_neighbor_indices)]).astype(np.int32)
+
     psuedo_pdd = np.vstack(
-        [[neighbor_distances[i][j] for j in ind] for i, ind in enumerate(final_neighbor_indices)])
+        [[neighbor_distances[i][j] for j in ind]
+         for i, ind in enumerate(final_neighbor_indices)])
 
     g_types_match = pdist(an.reshape((-1, 1))) == 0
     g_neighbors_match = (pdist(atomic_num_mat) == 0)
@@ -304,7 +347,7 @@ def mdg(atoms: Structure,
     ).reshape(-1)
 
     deviations = np.array(
-        [np.std(psuedo_pdd[group][:, :max_neighbors], axis=0) for group in groups],
+        [np.var(psuedo_pdd[group][:, :max_neighbors], axis=0) for group in groups],
         dtype=np.float64
     ).reshape(-1)
 
@@ -321,17 +364,19 @@ def mdg(atoms: Structure,
     pdd = dists.reshape(len(groups), max_neighbors)
     edge_weights = np.repeat(np.array(weights).reshape((-1, 1)), max_neighbors)
     edge_weights = edge_weights / edge_weights.sum()
-    u = [group_map[n[0]] for i, neighbors in enumerate(all_neighbors) for n in neighbors[:max_neighbors] if
+
+    u = [group_map[n[0]] for i, neighbors in enumerate(all_neighbors)
+         for n in neighbors[:max_neighbors] if
          i in idx_to_keep]
-    v = [group_map[n[1]] for i, neighbors in enumerate(all_neighbors) for n in neighbors[:max_neighbors] if
+
+    v = [group_map[n[1]] for i, neighbors in enumerate(all_neighbors)
+         for n in neighbors[:max_neighbors] if
          i in idx_to_keep]
 
     if backward_edges:
         edge_weights = np.concatenate([edge_weights, edge_weights])
         edge_weights = edge_weights / edge_weights.sum()
-        u2 = np.concatenate([u, v])
-        v = np.concatenate([v, u])
-        u = u2
+        u, v = np.concatenate([u, v]), np.concatenate([v, u])
         dists = np.concatenate([dists, dists])
         deviations = np.concatenate([deviations, deviations])
         maxes = np.concatenate([maxes, maxes])

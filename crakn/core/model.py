@@ -182,6 +182,7 @@ class CrAKN(nn.Module):
             nn.Linear(1, 1),
             nn.PReLU()
         )
+        self.cutoff = config.cutoff
 
     def forward3(self, inputs, pretrained=False, return_embeddings=False):
         backbone_input, amds, latt, _ = inputs
@@ -275,12 +276,12 @@ class CrAKN(nn.Module):
         edge_features = self.bias_embedding(amds[:, self.metric_comp_size:])
 
         if not self.training:
-            mask = None
+            mask = torch.ones(1, node_features.shape[0]).to(node_features.device)
             q = self.linear_q(node_features[-1:])
             k = self.linear_k(node_features)
             targets = targets[:-1]
             predictions = predictions[-1:]
-            bias = torch.cdist(edge_features[-1:], edge_features)
+            bias = torch.cdist(edge_features[-1:], edge_features, p=torch.inf)
         else:
             num_nodes = node_features.shape[0]
             mask = torch.concat([-torch.eye(num_nodes, device=node_features.device) + 1,
@@ -288,9 +289,11 @@ class CrAKN(nn.Module):
             q = self.linear_q(node_features)
             k = self.linear_k(node_features)
             k = torch.vstack([k, k])
-            bias = torch.cdist(edge_features, torch.vstack([edge_features, edge_features]))
+            bias = torch.cdist(edge_features, torch.vstack([edge_features, edge_features]), p=torch.inf)
 
+        mask[bias > self.cutoff] = 0
         bias = self.distance_embedding(bias.unsqueeze(-1)).squeeze(-1)
+
         for layer in self.layers:
             predictions, bias = layer(q, k, torch.vstack([targets, predictions]), bias=bias, mask=mask)
 

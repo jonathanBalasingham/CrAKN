@@ -278,6 +278,10 @@ def train_crakn(
                     )
         scheduler.step()
 
+    prepare_batch = partial(prepare_crakn_batch, device=device,
+                            internal_prepare_batch=train_loader.dataset.data.prepare_batch,
+                            variable=False)
+
     for i in [4, 8, 16, 32, 64, 128]:
             net.eval()
             f = open(os.path.join(output_path, "crakn_prediction_results_test_set.csv"), "w")

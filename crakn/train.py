@@ -278,7 +278,7 @@ def train_crakn(
                     )
         scheduler.step()
 
-    for i in [3, 6, 9, 12, 24, 36]:
+    for i in [4, 8, 16, 32, 64, 128]:
             net.eval()
             f = open(os.path.join(output_path, "crakn_prediction_results_test_set.csv"), "w")
             f.write("id,target,prediction\n")

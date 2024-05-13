@@ -15,3 +15,6 @@ prediction_results_test_set.csv
 prediction_results_train_set.csv
 temp
 build
+crakn/data/config_*
+crakn/data/debug.json
+run.sh

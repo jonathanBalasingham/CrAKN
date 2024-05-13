@@ -297,11 +297,13 @@ class CrAKNAttention(nn.Module):
         attn_logits = attn_logits / math.sqrt(d_k)
         if bias is not None:
             attn_logits += bias
+            bias = attn_logits
         if mask is not None:
             attn_logits = attn_logits.masked_fill(mask == 0, -9e15)
         attention = F.softmax(attn_logits, dim=-1)
         values = torch.matmul(attention, v)
-        return values, attention
+        return values, attention, torch.mean(bias, dim=0)
+
     def forward(self, q, k, v, mask=None, bias=None, embed_bias=True, embed_value=False):
         embed_bias = embed_bias if bias is not None else False
         seq_length = k.shape[0]
@@ -322,7 +324,7 @@ class CrAKNAttention(nn.Module):
         q = q.permute(1, 0, 2)
         k = k.permute(1, 0, 2)
         v = v.permute(1, 0, 2)
-        values, attention = self.scaled_dot_product(q, k, v, mask=mask, bias=diffs)
+        values, attention, bias = self.scaled_dot_product(q, k, v, mask=mask, bias=diffs)
         values = values.permute(1, 0, 2)
         if not embed_value:
             values = torch.mean(values, dim=1)
@@ -337,6 +339,6 @@ class CrAKNAttention(nn.Module):
         else:
             if not embed_bias:
                 return self.o_proj(values), bias
-            # return self.o_proj(values), self.bias_out(bias)
+
             return self.o_proj(values), bias
 

@@ -357,8 +357,8 @@ def create_test_dataloader(net: nn.Module, train_loader, test_loader, prepare_ba
         neighbor_node_features = net(X, target, return_embeddings=True)
         test_data.append((neighbor_node_features, X[1], X[2], target))
 
-    tree = KDTree(torch.concat([i[0] for i in neighbor_data], dim=0).cpu())
-    test_embeddings = torch.concat([i[0] for i in test_data]).cpu()
+    tree = KDTree(torch.concat([i[1] for i in neighbor_data], dim=0).cpu())
+    test_embeddings = torch.concat([i[1] for i in test_data]).cpu()
     nearest_neighbor_indices = tree.query(test_embeddings, k=max_neighbors)[1]
     td = []
 

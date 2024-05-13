@@ -344,7 +344,7 @@ def get_dataloader(dataset: CrAKNDataset, config: TrainingConfig):
     return train_loader, val_loader, test_loader
 
 
-def create_test_dataloader(net: nn.Module, train_loader, test_loader, prepare_batch, max_neighbors):
+def create_test_dataloader(net: nn.Module, train_loader, test_loader, prepare_batch, max_neighbors, cutoff=None):
     neighbor_data = []
     for dat in tqdm(train_loader, desc="Generating knowledge network node features.."):
         X, target = prepare_batch(dat)
@@ -359,11 +359,16 @@ def create_test_dataloader(net: nn.Module, train_loader, test_loader, prepare_ba
 
     tree = KDTree(torch.concat([i[1] for i in neighbor_data], dim=0).cpu())
     test_embeddings = torch.concat([i[1] for i in test_data]).cpu()
-    nearest_neighbor_indices = tree.query(test_embeddings, k=max_neighbors)[1]
+    if cutoff is None:
+        nearest_neighbor_indices = tree.query(test_embeddings, k=max_neighbors)[1]
+    else:
+        nearest_neighbor_indices = tree.query_ball_point(test_embeddings, r=cutoff, p=np.inf)
     td = []
 
     for i, test_datum in enumerate(test_loader.dataset):
         nni = nearest_neighbor_indices[i]
+        print(f"Number of neighbors found: {len(nni)}")
+
         nn_data = [train_loader.dataset[i] for i in nni]
         nn_data.append(test_datum)
         nn_data = list(zip(*nn_data))

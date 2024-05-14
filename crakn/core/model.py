@@ -284,18 +284,20 @@ class CrAKN(nn.Module):
             bias = torch.cdist(edge_features[-1:], edge_features, p=torch.inf)
         else:
             num_nodes = node_features.shape[0]
-            mask = torch.concat([-torch.eye(num_nodes, device=node_features.device) + 1,
-                                 torch.eye(num_nodes, device=node_features.device)], dim=1)
             q = self.linear_q(node_features)
             k = self.linear_k(node_features)
-            k = torch.vstack([k, k])
-            bias = torch.cdist(edge_features, torch.vstack([edge_features, edge_features]), p=torch.inf)
+            bias = torch.cdist(edge_features, edge_features, p=torch.inf)
+            mask = torch.ones(num_nodes, num_nodes, device=q.device)
 
         mask[bias > self.cutoff] = 0
         bias = self.distance_embedding(bias.unsqueeze(-1)).squeeze(-1)
 
-        for layer in self.layers:
-            predictions, bias = layer(q, k, torch.vstack([targets, predictions]), bias=bias, mask=mask)
+        if self.training:
+            for layer in self.layers:
+                predictions, bias = layer(q, k, predictions, bias=bias, mask=mask)
+        else:
+            for layer in self.layers:
+                predictions, bias = layer(q, k, torch.vstack([targets, predictions]), bias=bias, mask=mask)
 
         return predictions
 

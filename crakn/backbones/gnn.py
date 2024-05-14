@@ -6,27 +6,22 @@ import dgl.function as fn
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn.functional as F
 from dgl.nn import AvgPooling
-from dgl.nn.pytorch.conv import PNAConv
-from dgl.nn.pytorch.gt import EGTLayer
 from typing import Literal
 
 from dgl.nn.pytorch import SumPooling
 from jarvis.core.specie import get_node_attributes, chem_data
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Data
 from tqdm import tqdm
 
 from crakn.backbones.WeightedBatchNorm1d import WeightedBatchNorm1d
-from crakn.backbones.graphs import Graph, ddg, mdg
+from crakn.backbones.graphs import ddg, mdg
 
-# import torch
 from crakn.backbones.utils import RBFExpansion, AtomFeaturizer, DistanceExpansion, GaussianExpansion
 from crakn.utils import BaseSettings
 from pydantic_settings import SettingsConfigDict
-from scipy.constants import e, epsilon_0
 
 
 class GNNConfig(BaseSettings):
@@ -46,86 +41,176 @@ class GNNConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="jv_model")
 
 
-class GNNConv(nn.Module):
+def aggregate_mean(h):
+    """mean aggregation"""
+    return torch.mean(h, dim=1)
 
-    def __init__(
-            self,
-            node_features: int = 64,
-            edge_features: int = 32,
-            return_messages: bool = False,
-    ):
-        super().__init__()
-        self.node_features = node_features
-        self.edge_features = edge_features
-        self.return_messages = return_messages
-        self.linear_q = nn.Sequential(
-            nn.Linear(node_features, node_features)
+def aggregate_max(h):
+    """max aggregation"""
+    return torch.max(h, dim=1)[0]
+
+def aggregate_min(h):
+    """min aggregation"""
+    return torch.min(h, dim=1)[0]
+
+def aggregate_sum(h):
+    """sum aggregation"""
+    return torch.sum(h, dim=1)
+
+def aggregate_std(h):
+    """standard deviation aggregation"""
+    return torch.sqrt(aggregate_var(h) + 1e-30)
+
+def aggregate_var(h):
+    """variance aggregation"""
+    h_mean_squares = torch.mean(h * h, dim=1)
+    h_mean = torch.mean(h, dim=1)
+    var = torch.relu(h_mean_squares - h_mean * h_mean)
+    return var
+
+def _aggregate_moment(h, n):
+    """moment aggregation: for each node (E[(X-E[X])^n])^{1/n}"""
+    h_mean = torch.mean(h, dim=1, keepdim=True)
+    h_n = torch.mean(torch.pow(h - h_mean, n), dim=1)
+    rooted_h_n = torch.sign(h_n) * torch.pow(torch.abs(h_n) + 1e-30, 1. / n)
+    return rooted_h_n
+
+def aggregate_moment_3(h):
+    """moment aggregation with n=3"""
+    return _aggregate_moment(h, n=3)
+
+def aggregate_moment_4(h):
+    """moment aggregation with n=4"""
+    return _aggregate_moment(h, n=4)
+
+def aggregate_moment_5(h):
+    """moment aggregation with n=5"""
+    return _aggregate_moment(h, n=5)
+
+def scale_identity(h):
+    """identity scaling (no scaling operation)"""
+    return h
+
+def scale_amplification(h, D, delta):
+    """amplification scaling"""
+    return h * (np.log(D + 1) / delta)
+
+def scale_attenuation(h, D, delta):
+    """attenuation scaling"""
+    return h * (delta / np.log(D + 1))
+
+
+AGGREGATORS = {
+    'mean': aggregate_mean, 'sum': aggregate_sum, 'max': aggregate_max, 'min': aggregate_min,
+    'std': aggregate_std, 'var': aggregate_var, 'moment3': aggregate_moment_3,
+    'moment4': aggregate_moment_4, 'moment5': aggregate_moment_5
+}
+SCALERS = {
+    'identity': scale_identity,
+    'amplification': scale_amplification,
+    'attenuation': scale_attenuation
+}
+
+
+class PNAConvTower(nn.Module):
+
+    def __init__(self, in_size, out_size, aggregators, scalers,
+                 delta, dropout=0., edge_feat_size=0):
+        super(PNAConvTower, self).__init__()
+        self.in_size = in_size
+        self.out_size = out_size
+        self.aggregators = aggregators
+        self.scalers = scalers
+        self.delta = delta
+        self.edge_feat_size = edge_feat_size
+
+        self.M = nn.Linear(2 * in_size + edge_feat_size, in_size)
+        self.U = nn.Linear((len(aggregators) * len(scalers) + 1) * in_size, out_size)
+        self.dropout = nn.Dropout(dropout)
+        self.batchnorm = nn.BatchNorm1d(out_size)
+
+    def reduce_func(self, nodes):
+        msg = nodes.mailbox['msg']
+        degree = msg.size(1)
+        h = torch.cat([AGGREGATORS[agg](msg) for agg in self.aggregators], dim=1)
+        h = torch.cat([
+            SCALERS[scaler](h, D=degree, delta=self.delta) if scaler != 'identity' else h
+            for scaler in self.scalers
+        ], dim=1)
+        return {'h_neigh': h}
+
+    def message(self, edges):
+        """message function for PNA layer"""
+        if self.edge_feat_size > 0:
+            f = torch.cat([edges.src['h'], edges.dst['h'], edges.data['a']], dim=-1)
+        else:
+            f = torch.cat([edges.src['h'], edges.dst['h']], dim=-1)
+        return {'msg': self.M(f)}
+
+    def forward(self, graph, node_feat, edge_feat=None):
+        snorm_n = torch.cat(
+            [torch.ones(N, 1).to(node_feat) / N for N in graph.batch_num_nodes()],
+            dim=0
+        ).sqrt()
+        with graph.local_scope():
+            graph.ndata['h'] = node_feat
+            if self.edge_feat_size > 0:
+                assert edge_feat is not None, "Edge features must be provided."
+                graph.edata['a'] = edge_feat
+
+            graph.update_all(self.message, self.reduce_func)
+            h = self.U(
+                torch.cat([node_feat, graph.ndata['h_neigh']], dim=-1)
+            )
+            h = h * snorm_n
+            return self.dropout(self.batchnorm(h))
+
+
+class PNAConv(nn.Module):
+
+    def __init__(self, in_size, out_size, aggregators, scalers, delta,
+                 dropout=0., num_towers=1, edge_feat_size=0, residual=True):
+        super(PNAConv, self).__init__()
+
+        self.in_size = in_size
+        self.out_size = out_size
+        assert in_size % num_towers == 0, 'in_size must be divisible by num_towers'
+        assert out_size % num_towers == 0, 'out_size must be divisible by num_towers'
+        self.tower_in_size = in_size // num_towers
+        self.tower_out_size = out_size // num_towers
+        self.edge_feat_size = edge_feat_size
+        self.residual = residual
+        if self.in_size != self.out_size:
+            self.residual = False
+
+        self.towers = nn.ModuleList([
+            PNAConvTower(
+                self.tower_in_size, self.tower_out_size,
+                aggregators, scalers, delta,
+                dropout=dropout, edge_feat_size=edge_feat_size
+            ) for _ in range(num_towers)
+        ])
+
+        self.mixing_layer = nn.Sequential(
+            nn.Linear(out_size, out_size),
+            nn.LeakyReLU()
         )
 
-        self.linear_k = nn.Sequential(
-            nn.Linear(node_features, node_features)
-        )
+    def forward(self, graph, node_feat, edge_feat=None):
+        h_cat = torch.cat([
+            tower(
+                graph,
+                node_feat[:, ti * self.tower_in_size: (ti + 1) * self.tower_in_size],
+                edge_feat
+            )
+            for ti, tower in enumerate(self.towers)
+        ], dim=1)
+        h_out = self.mixing_layer(h_cat)
+        # add residual connection
+        if self.residual:
+            h_out = h_out + node_feat
 
-        self.linear_v = nn.Sequential(
-            nn.Linear(node_features, node_features)
-        )
-
-        self.linear_edge = nn.Sequential(
-            nn.Linear(node_features, node_features)
-        )
-
-        self.linear_m = nn.Sequential(
-            nn.Linear(node_features, node_features)
-        )
-
-        self.linear_g = nn.Sequential(
-            nn.Linear(node_features, node_features),
-            nn.Mish()
-        )
-
-        self.final = nn.Sequential(
-            nn.Linear(node_features, node_features),
-            nn.Mish(),
-            nn.LayerNorm(node_features),
-            nn.Linear(node_features, node_features)
-        )
-
-        self.ln = nn.LayerNorm(node_features)
-        self.bn_message = nn.BatchNorm1d(node_features)
-        self.register_buffer("e", torch.Tensor([e]).float())
-        self.register_buffer("epsilon_0", torch.Tensor([epsilon_0]).float())
-
-        self.bn = nn.BatchNorm1d(node_features)
-        self.bn2 = nn.BatchNorm1d(node_features)
-
-    def forward(
-            self,
-            g: dgl.DGLGraph,
-            node_feats: torch.Tensor,
-            edge_feats: torch.Tensor,
-    ):
-        g = g.local_var()
-
-        g.ndata["q"] = self.linear_q(node_feats)
-        g.ndata["k"] = self.linear_k(node_feats)
-        g.ndata["v"] = self.linear_v(node_feats)
-
-        e = self.linear_edge(edge_feats)
-        m = self.linear_m(edge_feats)
-
-        g.apply_edges(fn.u_sub_v("q", "k", "h_nodes"))
-        g.edata["w"] = dgl.nn.functional.edge_softmax(g, m * g.edata["h_nodes"] + e)
-        g.apply_edges(fn.u_mul_e("v", "w", "m"))
-
-        g.update_all(
-            message_func=fn.copy_e("m", "z"),
-            reduce_func=fn.sum("z", "h"),
-        )
-
-        h = g.ndata.pop("h")
-        h = self.final(h + node_feats)
-        h = self.ln(h)
-        return h, edge_feats
+        return h_out
 
 
 class GNN(nn.Module):
@@ -201,6 +286,7 @@ class GNN(nn.Module):
 
     def forward(self, g, output_level: Literal["atom", "crystal", "property"]) -> torch.Tensor:
         g = g.local_var()
+        g.ndata["weights"] = g.ndata["weights"][:, None]
 
         if "r" in g.edata:
             g.edata["distance"] = torch.norm(g.edata["r"], dim=-1, keepdim=False)
@@ -218,7 +304,9 @@ class GNN(nn.Module):
         v = g.ndata.pop("atom_features")
         node_features = self.atom_embedding(self.af(v))
         if "distances" in g.ndata:
-            node_features = self.norm(node_features + self.distance_embedding(g.ndata["distances"]))
+            #encoding = torch.exp(-(g.ndata["distances"] ** 2))
+            encoding = g.ndata["distances"]
+            node_features = self.norm(node_features + self.distance_embedding(encoding))
 
         for conv_layer in self.conv_layers:
             node_features = conv_layer(g, node_features, edge_features)
@@ -233,7 +321,7 @@ class GNN(nn.Module):
             return weights, node_features
 
         if "weights" in g.ndata:
-            features = self.weighted_readout(g, node_features * g.ndata["weights"].reshape((-1, 1)))
+            features = self.weighted_readout(g, node_features * g.ndata["weights"])
         else:
             features = self.readout(g, node_features)
 
@@ -325,6 +413,7 @@ class GNNData(torch.utils.data.Dataset):
         g, t = batch
         if subset is not None:
             g = dgl.batch(dgl.unbatch(g)[:subset])
-            return g.to(device=device, non_blocking=non_blocking), t[:subset].to(device=device, non_blocking=non_blocking)
+            return g.to(device=device, non_blocking=non_blocking), t[:subset].to(device=device,
+                                                                                 non_blocking=non_blocking)
 
         return g.to(device, non_blocking=non_blocking), t.to(device, non_blocking=non_blocking)

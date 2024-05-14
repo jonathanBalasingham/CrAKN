@@ -291,8 +291,14 @@ def train_crakn(
     with torch.no_grad():
 
         if config.base_config.mtype == "Transformer":
-            print(f"Using: {config.base_config.cutoff}")
-            test_data = create_test_dataloader(net, train_loader, test_loader, prepare_batch, config.max_neighbors, cutoff=config.base_config.cutoff)
+            test_data = create_test_dataloader(
+                net,
+                train_loader,
+                test_loader,
+                prepare_batch,
+                config.max_neighbors,
+                cutoff=config.cutoff
+            )
 
             for dat in tqdm(test_data, desc="Predicting on test set.."):
                 X_test, target = prepare_batch(dat)

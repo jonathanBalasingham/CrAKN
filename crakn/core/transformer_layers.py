@@ -268,6 +268,7 @@ class CrAKNAttention(nn.Module):
         self.q_proj = nn.Linear(input_dim, head_dim * num_heads)
         self.k_proj = nn.Linear(input_dim, head_dim * num_heads)
         self.v_proj = nn.Linear(input_dim, head_dim * num_heads)
+        self.m = nn.Parameter(torch.Tensor([1.]))
         self.o_proj = nn.Sequential(nn.Linear(head_dim * num_heads, head_dim * num_heads),
                                             nn.Mish(), nn.Linear(head_dim * num_heads, input_dim))
         self.bias_out = nn.Sequential(nn.Linear(head_dim * num_heads, input_dim),
@@ -289,23 +290,23 @@ class CrAKNAttention(nn.Module):
         self.o_proj.apply(self._reset_linear_parameters)
 
     def scaled_dot_product(self, q, k, v, mask=None, bias=None):
-        """
-        k and v must have the same seq length
-        """
         d_k = q.size()[-1]
         attn_logits = torch.matmul(q, k.transpose(-2, -1))
         attn_logits = attn_logits / math.sqrt(d_k)
+
         if bias is not None:
             attn_logits += bias
             bias = attn_logits
+
         if mask is not None:
-            attn_logits = attn_logits.masked_fill(mask == 0, -9e15)
+            attn_logits = attn_logits.masked_fill(mask < 1e-8, -9e15)
+
         attention = F.softmax(attn_logits, dim=-1)
         values = torch.matmul(attention, v)
         return values, attention, torch.mean(bias, dim=0)
 
     def forward(self, q, k, v, mask=None, bias=None, embed_bias=True, embed_value=False):
-        embed_bias = embed_bias if bias is not None else False
+        embed_bias = False if bias is None else embed_bias
         seq_length = k.shape[0]
         if mask is not None:
             mask = mask.unsqueeze(0)
@@ -316,11 +317,12 @@ class CrAKNAttention(nn.Module):
         else:
             v = v.unsqueeze(1).expand(-1, self.num_heads, -1)
         v = v.reshape(v.shape[0], self.num_heads, -1)
-        vdim = v.shape[-1]
+
         if bias is not None:
             diffs = bias.unsqueeze(0).expand(self.num_heads, -1, -1)
         else:
             diffs = None
+
         q = q.permute(1, 0, 2)
         k = k.permute(1, 0, 2)
         v = v.permute(1, 0, 2)
@@ -330,15 +332,9 @@ class CrAKNAttention(nn.Module):
             values = torch.mean(values, dim=1)
             if not embed_bias:
                 return values, bias
-            # return values, self.bias_out(bias)
+
             return values, bias
+
         values = values.reshape(seq_length, self.num_heads * self.head_dim)
         values = self.dropout(values)
-        if bias is None:
-            return self.o_proj(values), None
-        else:
-            if not embed_bias:
-                return self.o_proj(values), bias
-
-            return self.o_proj(values), bias
-
+        return self.o_proj(values), bias

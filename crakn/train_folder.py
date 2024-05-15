@@ -10,8 +10,8 @@ from crakn.core.data import DATA_FORMATS, CrAKNDataset, get_dataloader
 from crakn.train import train_crakn
 from jarvis.db.jsonutils import loadjson
 from jarvis.core.atoms import Atoms
-from pymatgen.core.structure import Structure
 import argparse
+
 
 device = "cpu"
 if torch.cuda.is_available():
@@ -44,7 +44,7 @@ parser.add_argument(
 )
 
 
-def read_folder(folder_path: str):
+def read_folder(folder_path: str, format: str):
     id_prop_file = os.path.join(folder_path, "id_prop.csv")
     with open(id_prop_file, "r") as f:
         reader = csv.reader(f)
@@ -82,10 +82,10 @@ def read_folder(folder_path: str):
                 "File format not implemented", file_format
             )
 
-        if DATA_FORMATS[config.base_config.backbone] == "pymatgen":
+        if format == "pymatgen":
             structure = atoms.pymatgen_converter()
             structures.append(structure)
-        elif DATA_FORMATS[config.base_config.backbone] == "jarvis":
+        elif format == "jarvis":
             structures.append(atoms)
 
         ids.append(file_name)
@@ -93,6 +93,7 @@ def read_folder(folder_path: str):
         targets.append(tmp)
 
     return structures, targets, ids
+
 
 def train_folder(config: TrainingConfig, folder_path: str, cache: bool):
     cache_path = os.path.join(folder_path, "cache_structures")
@@ -103,7 +104,7 @@ def train_folder(config: TrainingConfig, folder_path: str, cache: bool):
         history = train_crakn(config, dataloaders=(train_loader, val_loader, test_loader))
         return history
     else:
-        structures, targets, ids = read_folder(folder_path)
+        structures, targets, ids = read_folder(folder_path, DATA_FORMATS[config.base_config.backbone])
         pickle.dump((structures, targets, ids), open(cache_path, "wb"))
 
     dataset = CrAKNDataset(structures, targets, ids, config)

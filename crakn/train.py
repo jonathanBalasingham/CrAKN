@@ -297,7 +297,7 @@ def train_crakn(
                 test_loader,
                 prepare_batch,
                 config.max_neighbors,
-                cutoff=config.cutoff
+                cutoff=config.base_config.cutoff
             )
 
             for dat in tqdm(test_data, desc="Predicting on test set.."):

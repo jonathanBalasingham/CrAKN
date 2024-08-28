@@ -273,6 +273,59 @@ def ddg(atoms: Structure,
     return g
 
 
+def dg(g: dgl.graph, collapse_tol=1e-4, edata_key="distance", ndata_key="atom_features"):
+    group_map = {int(i): int(i) for i in g.nodes()}
+    e = g.edges()
+    edges = {int(i): defaultdict(list) for i in g.nodes()}
+    for i in range(g.num_edges()):
+        src, dst = int(e[0][i]), int(e[1][i])
+        edges[src][dst].append(g.edata[edata_key][i])
+
+    for i in range(g.num_nodes() - 1):
+        for j in range(i + 1, g.num_nodes()):
+            if ndata_key is not None:
+                if torch.all(g.ndata[ndata_key][i] != g.ndata[ndata_key][j]).item():
+                    continue
+            if edges[i].keys() != edges[j].keys():
+                continue
+            else:
+                collapsable = []
+                for key in edges[i].keys():
+                    if key == i or key == j:
+                        continue
+
+                    if len(edges[i][key]) != len(edges[j][key]):
+                        collapsable.append(False)
+                    else:
+                        collapsable.append(np.linalg.norm(np.array(edges[i][key]) -
+                                                          np.array(edges[j][key])) < collapse_tol)
+
+                if len(edges[i][i]) != len(edges[j][j]) or len(edges[i][j]) != len(edges[j][i]):
+                    collapsable.append(False)
+                else:
+                    collapsable.append(np.linalg.norm(np.array(edges[i][i]) -
+                                                      np.array(edges[j][j])) < collapse_tol)
+                    collapsable.append(np.linalg.norm(np.array(edges[i][j]) -
+                                                      np.array(edges[j][i])) < collapse_tol)
+
+                if np.all(collapsable):
+                    group_map[j] = group_map[i]
+
+    groups = defaultdict(list)
+    for k in group_map.keys():
+        groups[group_map[k]].append(k)
+
+    nn = g.num_nodes()
+    weights = g.ndata["weights"].numpy() if "weights" in g.ndata else np.array([1 / nn for _ in range(nn)])[:, None]
+    combined_weights = [np.sum(weights[groups[group]]) for group in groups.keys()]
+
+    for edge_idx in range(g.num_edges()):
+        g.edges()[1][edge_idx] = group_map[g.edges()[1][edge_idx].item()]
+
+    g.remove_nodes([k for k in group_map.keys() if group_map[k] != k])
+    g.ndata["weights"] = torch.Tensor(combined_weights)
+    return g
+
 
 class GaussianDistance(object):
     """
@@ -280,6 +333,7 @@ class GaussianDistance(object):
 
     Unit: angstrom
     """
+
     def __init__(self, dmin, dmax, step, var=None):
         """
         Parameters
@@ -294,14 +348,14 @@ class GaussianDistance(object):
         """
         assert dmin < dmax
         assert dmax - dmin > step
-        self.filter = np.arange(dmin, dmax+step, step)
+        self.filter = np.arange(dmin, dmax + step, step)
         if var is None:
             var = step
         self.var = var
 
     def expand(self, distances):
-        return np.exp(-(distances[..., np.newaxis] - self.filter)**2 /
-                      self.var**2)
+        return np.exp(-(distances[..., np.newaxis] - self.filter) ** 2 /
+                      self.var ** 2)
 
 
 def create_edge_features(distances, variances, size):

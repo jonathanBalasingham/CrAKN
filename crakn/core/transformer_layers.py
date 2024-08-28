@@ -34,12 +34,12 @@ class CrAKNVectorAttention2D(nn.Module):
 
         self.linear_q = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim, bias=qkv_bias),
-            #nn.LayerNorm(embedding_dim),
+            # nn.LayerNorm(embedding_dim),
             activation(inplace=True),
         )
         self.linear_k = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim, bias=qkv_bias),
-            #nn.LayerNorm(embedding_dim),
+            # nn.LayerNorm(embedding_dim),
             activation(inplace=True),
         )
 
@@ -48,7 +48,7 @@ class CrAKNVectorAttention2D(nn.Module):
         if self.delta_mul:
             self.linear_p_multiplier = nn.Sequential(
                 nn.Linear(embedding_dim, embedding_dim),
-                #nn.LayerNorm(embedding_dim),
+                # nn.LayerNorm(embedding_dim),
                 nn.BatchNorm1d(embedding_dim),
                 activation(inplace=True),
                 nn.Linear(embedding_dim, embedding_dim),
@@ -56,14 +56,14 @@ class CrAKNVectorAttention2D(nn.Module):
         if self.delta_bias:
             self.linear_p_bias = nn.Sequential(
                 nn.Linear(embedding_dim, embedding_dim),
-                #nn.LayerNorm(embedding_dim),
+                # nn.LayerNorm(embedding_dim),
                 nn.BatchNorm1d(embedding_dim),
                 activation(inplace=True),
                 nn.Linear(embedding_dim, embedding_dim),
             )
         self.weight_encoding = nn.Sequential(
             nn.Linear(embedding_dim, embedding_dim),
-            #nn.LayerNorm(embedding_dim),
+            # nn.LayerNorm(embedding_dim),
             nn.BatchNorm1d(embedding_dim),
             activation(inplace=True),
             nn.Linear(embedding_dim, embedding_dim),
@@ -250,7 +250,6 @@ class CrAKNEncoder(nn.Module):
             return q, k, torch.mean(values, dim=-1, keepdim=True), bias
 
 
-
 class CrAKNAttention(nn.Module):
     def __init__(self, input_dim, num_heads, head_dim, dropout=0):
         super().__init__()
@@ -270,7 +269,7 @@ class CrAKNAttention(nn.Module):
         self.v_proj = nn.Linear(input_dim, head_dim * num_heads)
         self.m = nn.Parameter(torch.Tensor([1.]))
         self.o_proj = nn.Sequential(nn.Linear(head_dim * num_heads, head_dim * num_heads),
-                                            nn.Mish(), nn.Linear(head_dim * num_heads, input_dim))
+                                    nn.Mish(), nn.Linear(head_dim * num_heads, input_dim))
         self.bias_out = nn.Sequential(nn.Linear(head_dim * num_heads, input_dim),
                                       nn.Mish())
         self._reset_parameters()
@@ -338,3 +337,53 @@ class CrAKNAttention(nn.Module):
         values = values.reshape(seq_length, self.num_heads * self.head_dim)
         values = self.dropout(values)
         return self.o_proj(values), bias
+
+
+class CrAKNConv(nn.Module):
+    def __init__(self, input_dim, embed_dim, dropout=0):
+        super().__init__()
+        self.input_dim = input_dim
+        self.embed_dim = embed_dim
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(embed_dim)
+
+        self.node_embedding = nn.Sequential(
+            nn.Linear(input_dim, embed_dim),
+            nn.PReLU(),
+            nn.LayerNorm(embed_dim)
+        )
+
+        self.neighbor_embedding = nn.Sequential(
+            nn.Linear(input_dim, embed_dim),
+            nn.PReLU(),
+            nn.LayerNorm(embed_dim)
+        )
+
+        self.edge_embedding = nn.Sequential(
+            nn.Linear(input_dim, embed_dim),
+            nn.PReLU(),
+            nn.LayerNorm(embed_dim)
+        )
+
+        self.out = nn.Sequential(
+            nn.Linear(embed_dim * 3, embed_dim * 3),
+            nn.PReLU(),
+            nn.LayerNorm(embed_dim * 3),
+            nn.Linear(embed_dim * 3, input_dim)
+        )
+
+        self.out_norm = nn.LayerNorm(input_dim)
+
+    def forward(self, node_features, edge_features):
+        nf = self.node_embedding(node_features)
+        neighbor_features = self.neighbor_embedding(node_features)
+        feature_diffs = nf[:, None, :] - neighbor_features[None, :, :]
+        amd_diff = edge_features[:, None, :] - edge_features[None, :, :]
+        amd_diff = self.edge_embedding(amd_diff)
+        all_features = torch.concat([
+            nf.repeat_interleave(nf.shape[0], dim=0).reshape(feature_diffs.shape),
+            amd_diff,
+            feature_diffs
+        ], dim=-1)
+        updated_features = self.out(all_features)
+        return self.out_norm(node_features + torch.sum(updated_features, dim=1)), edge_features

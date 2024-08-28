@@ -3,7 +3,8 @@ import random
 import torch
 from torch import nn
 
-from crakn.core.transformer_layers import CrAKNEncoder, CrAKNVectorAttention2D, CrAKNVectorAttention3D, CrAKNAttention
+from crakn.core.transformer_layers import CrAKNEncoder, CrAKNVectorAttention2D, CrAKNVectorAttention3D, CrAKNAttention, \
+    CrAKNConv
 from crakn.utils import BaseSettings
 from typing import Literal, Union, List
 
@@ -14,12 +15,12 @@ from ..backbones.cgcnn import CGCNN, CGCNNConfig
 from ..backbones.pst_v2 import PeriodicSetTransformerV2, PSTv2Config
 from crakn.backbones.gnn import GNN, GNNConfig
 
-
 COMPONENTS = Literal[
     "vertex",
     "metavertex",
     "metaedge"
 ]
+
 
 class CrAKNConfig(BaseSettings):
     name: Literal["crakn"]
@@ -168,6 +169,14 @@ class CrAKN(nn.Module):
             for _ in range(config.layers)
         ])
 
+        self.layers = nn.ModuleList([
+            CrAKNConv(
+                config.embedding_dim,
+                config.embedding_dim
+            )
+            for _ in range(config.layers)
+        ])
+
         self.backbone_out = nn.Linear(
             config.embedding_dim,
             config.output_features
@@ -221,7 +230,6 @@ class CrAKN(nn.Module):
 
         return self.out(mvf)
 
-
     def forward1(self, inputs, pretrained=False, return_embeddings=False) -> torch.Tensor:
         backbone_input, amds, latt, _ = inputs
         bb_X = backbone_input[:-1]
@@ -257,7 +265,7 @@ class CrAKN(nn.Module):
 
         return self.out(mvf)
 
-    def forward(self, inputs, targets, return_embeddings=False) -> torch.Tensor:
+    def forward6(self, inputs, targets, return_embeddings=False) -> torch.Tensor:
         backbone_input, amds, _, _ = inputs
         bb_X = backbone_input[:-1]
         if len(bb_X) == 1:
@@ -300,6 +308,27 @@ class CrAKN(nn.Module):
                 predictions, bias = layer(q, k, torch.vstack([targets, predictions]), bias=bias, mask=mask)
 
         return predictions
+
+    def forward(self, inputs, targets, return_embeddings=False) -> torch.Tensor:
+        backbone_input, amds, _, _ = inputs
+        bb_X = backbone_input[:-1]
+        if len(bb_X) == 1:
+            bb_X = bb_X[0]
+
+        node_features = self.backbone(bb_X, output_level="crystal")
+
+        if self.backbone_only:
+            return self.out(node_features)
+
+        node_features = self.embedding(node_features)
+        if return_embeddings:
+            return node_features
+
+        edge_features = self.bias_embedding(amds[:, self.metric_comp_size:])
+        for layer in self.layers:
+            node_features, edge_features = layer(node_features, edge_features)
+
+        return self.out(node_features)
 
     def forward4(self, inputs, targets, return_embeddings=False) -> torch.Tensor:
         backbone_input, amds, _, _ = inputs

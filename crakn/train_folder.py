@@ -53,7 +53,7 @@ def read_folder(folder_path: str, format: str):
     files = os.listdir(folder_path)
     for file in files:
         ext = os.path.basename(file).split(".")[-1]
-        if ext == "csv":
+        if ext == "csv" or ext == "json":
             pass
         else:
             file_format = ext

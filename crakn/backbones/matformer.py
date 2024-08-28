@@ -1,15 +1,10 @@
-from multiprocessing.context import ForkContext
 from pathlib import Path
-from re import X
 import numpy as np
-import pandas as pd
 import torch_geometric
 from jarvis.core.specie import chem_data, get_node_attributes
 
-# from jarvis.core.atoms import Atoms
 from collections import defaultdict
 from typing import List, Tuple, Sequence, Optional, Literal
-import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch_geometric.data import Data
 from torch_geometric.transforms import LineGraph
@@ -22,7 +17,7 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from torch_sparse import SparseTensor
+#from torch_sparse import SparseTensor
 import torch.nn as nn
 
 from torch_geometric.nn.conv import MessagePassing
@@ -32,7 +27,6 @@ from torch_scatter import scatter
 from crakn.backbones.utils import RBFExpansion, angle_emb_mp
 from crakn.utils import BaseSettings
 import pandas as pd
-import dgl
 
 try:
     import torch
@@ -327,8 +321,8 @@ class MatformerConv(MessagePassing):
             assert alpha is not None
             if isinstance(edge_index, Tensor):
                 return out, (edge_index, alpha)
-            elif isinstance(edge_index, SparseTensor):
-                return out, edge_index.set_value(alpha, layout='coo')
+            #elif isinstance(edge_index, SparseTensor):
+            #    return out, edge_index.set_value(alpha, layout='coo')
         else:
             return out
 

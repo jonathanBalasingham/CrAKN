@@ -4,6 +4,7 @@ import time
 from functools import reduce, partial
 from typing import Union, Dict, Any, Tuple
 
+import amd
 import dgl
 import numpy as np
 import torch
@@ -14,7 +15,7 @@ from torch.utils.data import DataLoader, SubsetRandomSampler
 from tqdm import tqdm
 
 from crakn.backbones.gnn import GNNData
-from crakn.backbones.graphs import dg
+from crakn.backbones.graphs import dg, _collapse_into_groups
 from crakn.core.data import CrAKNDataset, get_dataloader
 
 from crakn.config import TrainingConfig
@@ -24,7 +25,7 @@ from jarvis.db.jsonutils import loadjson
 from scipy.io import loadmat
 import pickle
 import argparse
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import pdist, squareform, cdist
 
 from crakn.utils import mae, mse, rmse, AverageMeter, Normalizer, count_parameters
 
@@ -71,6 +72,49 @@ parser.add_argument(
 )
 
 
+def create_ddg(points, species, k, tau):
+    species_match = pdist(species[:, None]) < 1e-5
+    distance_matrix = amd.PDD_finite(points, collapse=False)[:, 1:k+1]
+    distances_match = pdist(distance_matrix) < tau
+
+    collapsable = species_match & distances_match
+    print(collapsable)
+    groups = _collapse_into_groups(collapsable)
+    group_map = {g: i for i, group in enumerate(groups) for g in group}
+
+    idx_to_keep = set([group[0] for group in groups])
+    atom_types = [species[group[0]] for group in groups]
+
+    m = distance_matrix.shape[0]
+    weights = np.full((m,), 1 / m, dtype=np.float64)
+    weights = np.array([np.sum(weights[group]) for group in groups])
+    dists = np.array(
+        [np.average(distance_matrix[group], axis=0) for group in groups],
+        dtype=np.float64
+    ).reshape(-1)
+
+    max_neighbors = min(k, species.shape[0])
+    pdd = dists.reshape(len(groups), max_neighbors)
+    edge_weights = np.repeat(np.array(weights).reshape((-1, 1)), max_neighbors)
+    edge_weights = edge_weights / edge_weights.sum()
+
+    dist_mat = squareform(pdist(points))
+    k = min(k, dist_mat.shape[0])
+    all_neighbors = np.argsort(dist_mat, axis=1)[:, :k]
+
+    v = np.array([group_map[i] for i in all_neighbors.reshape(-1) if i in idx_to_keep])
+    u = [i for i in range(len(groups)) for _ in range(k)]
+    u = np.array(u)
+
+    g = dgl.graph((u, v))
+    g.edata["distance"] = torch.tensor(dists).type(torch.get_default_dtype())
+    g.ndata["weights"] = torch.tensor(weights).type(torch.get_default_dtype())
+    g.edata["edge_weights"] = torch.tensor(edge_weights).type(torch.get_default_dtype())
+    g.ndata["atom_features"] = torch.tensor(atom_types).type(torch.get_default_dtype())
+    g.ndata["distances"] = torch.tensor(pdd).type(torch.get_default_dtype())
+    return g
+
+
 def cloud_to_graph(x: np.array, k: int) -> dgl.graph:
     dist_mat = squareform(pdist(x))
     k = min(k, dist_mat.shape[0])
@@ -111,17 +155,25 @@ def load_qm7(path: str, config: TrainingConfig, coord_key="R", target_key="T", a
         unpadded_coords = coords[index][:padding_start_index]
         unpadded_atom_types = atom_types[index][:padding_start_index]
 
-        g = cloud_to_graph(unpadded_coords, config.base_config.backbone_config.max_neighbors)
-        g.ndata["atom_features"] = torch.Tensor(unpadded_atom_types)
-
-        num_nodes.append(g.num_nodes())
-        num_edges.append(g.num_edges())
+        num_nodes.append(unpadded_coords.shape[0])
+        num_edges.append(unpadded_coords.shape[0] * min(config.base_config.backbone_config.max_neighbors, unpadded_coords.shape[0]))
         if use_dg:
-            g = dg(g, collapse_tol=config.base_config.backbone_config.collapse_tol)
-            dg_num_nodes.append(g.num_nodes())
-            dg_num_edges.append(g.num_edges())
+            g = create_ddg(
+                unpadded_coords,
+                unpadded_atom_types,
+                config.base_config.backbone_config.max_neighbors,
+                config.base_config.backbone_config.collapse_tol
+            )
         else:
-            g.ndata["weights"] = torch.ones(g.num_nodes())
+            g = create_ddg(
+                unpadded_coords,
+                unpadded_atom_types,
+                config.base_config.backbone_config.max_neighbors,
+                -1
+            )
+
+        dg_num_nodes.append(g.num_nodes())
+        dg_num_edges.append(g.num_edges())
 
         graphs.append(g)
 

@@ -73,16 +73,16 @@ parser.add_argument(
 
 
 def create_ddg(points, species, k, tau):
-    species_match = pdist(species[:, None]) < 1e-5
-    distance_matrix = amd.PDD_finite(points, collapse=False)[:, 1:k+1]
-    distances_match = pdist(distance_matrix) < tau
+    k = min(k, points.shape[0])
 
+    species_match = pdist(species[:, None]) < 1e-5
+    distance_matrix = amd.PDD_finite(points, collapse=False)[:, 1:k]
+    distance_matrix = np.hstack([np.zeros(species.shape[0])[:, None], distance_matrix])
+    distances_match = pdist(distance_matrix) < tau
     collapsable = species_match & distances_match
-    print(collapsable)
     groups = _collapse_into_groups(collapsable)
     group_map = {g: i for i, group in enumerate(groups) for g in group}
 
-    idx_to_keep = set([group[0] for group in groups])
     atom_types = [species[group[0]] for group in groups]
 
     m = distance_matrix.shape[0]
@@ -94,15 +94,13 @@ def create_ddg(points, species, k, tau):
     ).reshape(-1)
 
     max_neighbors = min(k, species.shape[0])
-    pdd = dists.reshape(len(groups), max_neighbors)
     edge_weights = np.repeat(np.array(weights).reshape((-1, 1)), max_neighbors)
     edge_weights = edge_weights / edge_weights.sum()
 
     dist_mat = squareform(pdist(points))
-    k = min(k, dist_mat.shape[0])
-    all_neighbors = np.argsort(dist_mat, axis=1)[:, :k]
+    all_neighbors = np.argsort(dist_mat, axis=1)[[g[0] for g in groups], :k]
 
-    v = np.array([group_map[i] for i in all_neighbors.reshape(-1) if i in idx_to_keep])
+    v = np.array([group_map[i] for i in all_neighbors.reshape(-1)])
     u = [i for i in range(len(groups)) for _ in range(k)]
     u = np.array(u)
 
@@ -111,7 +109,6 @@ def create_ddg(points, species, k, tau):
     g.ndata["weights"] = torch.tensor(weights).type(torch.get_default_dtype())
     g.edata["edge_weights"] = torch.tensor(edge_weights).type(torch.get_default_dtype())
     g.ndata["atom_features"] = torch.tensor(atom_types).type(torch.get_default_dtype())
-    g.ndata["distances"] = torch.tensor(pdd).type(torch.get_default_dtype())
     return g
 
 

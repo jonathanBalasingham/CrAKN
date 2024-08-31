@@ -3,6 +3,7 @@ import random
 import time
 from functools import reduce, partial
 from typing import Union, Dict, Any, Tuple
+from venv import create
 
 import amd
 import dgl
@@ -72,44 +73,41 @@ parser.add_argument(
 )
 
 
-def create_ddg(points, species, k, tau):
-    k = min(k, points.shape[0])
+def create_graph(points, species, k, tau):
+    dist_mat = squareform(pdist(points))
+    nn_indices = np.argsort(dist_mat, axis=1)[:, :k]
+    ordered_distances = np.sort(dist_mat, axis=1)[:, :k]
 
-    species_match = pdist(species[:, None]) < 1e-5
-    distance_matrix = amd.PDD_finite(points, collapse=False)[:, 1:k]
-    distance_matrix = np.hstack([np.zeros(species.shape[0])[:, None], distance_matrix])
-    distances_match = pdist(distance_matrix) < tau
-    collapsable = species_match & distances_match
+    distances_match = pdist(ordered_distances) < tau
+    species_match = pdist(species[:, None]) < 1e-8
+    neighbor_species_match = pdist(species[nn_indices]) < 1e-8
+
+    collapsable = distances_match & species_match & neighbor_species_match
     groups = _collapse_into_groups(collapsable)
     group_map = {g: i for i, group in enumerate(groups) for g in group}
+    u, v = [], []
+    edge_features = []
+    node_features = []
+    for group in groups:
+        row_to_keep = group[0]
+        for neighbor in nn_indices[row_to_keep]:
+            u.append(group_map[row_to_keep])
+            v.append(group_map[neighbor])
+            edge_features.append(dist_mat[row_to_keep][neighbor])
 
-    atom_types = [species[group[0]] for group in groups]
+        node_features.append(species[row_to_keep])
 
-    m = distance_matrix.shape[0]
+    m = dist_mat.shape[0]
     weights = np.full((m,), 1 / m, dtype=np.float64)
     weights = np.array([np.sum(weights[group]) for group in groups])
-    dists = np.array(
-        [np.average(distance_matrix[group], axis=0) for group in groups],
-        dtype=np.float64
-    ).reshape(-1)
-
-    max_neighbors = min(k, species.shape[0])
-    edge_weights = np.repeat(np.array(weights).reshape((-1, 1)), max_neighbors)
-    edge_weights = edge_weights / edge_weights.sum()
-
-    dist_mat = squareform(pdist(points))
-    all_neighbors = np.argsort(dist_mat, axis=1)[[g[0] for g in groups], :k]
-
-    v = np.array([group_map[i] for i in all_neighbors.reshape(-1)])
-    u = [i for i in range(len(groups)) for _ in range(k)]
-    u = np.array(u)
 
     g = dgl.graph((u, v))
-    g.edata["distance"] = torch.tensor(dists).type(torch.get_default_dtype())
-    g.ndata["weights"] = torch.tensor(weights).type(torch.get_default_dtype())
-    g.edata["edge_weights"] = torch.tensor(edge_weights).type(torch.get_default_dtype())
-    g.ndata["atom_features"] = torch.tensor(atom_types).type(torch.get_default_dtype())
+    g.edata["distance"] = torch.tensor(edge_features).type(torch.get_default_dtype())
+    if tau >= 0:
+        g.ndata["weights"] = torch.tensor(weights).type(torch.get_default_dtype())
+    g.ndata["atom_features"] = torch.tensor(node_features).type(torch.get_default_dtype())
     return g
+
 
 
 def cloud_to_graph(x: np.array, k: int) -> dgl.graph:
@@ -155,14 +153,14 @@ def load_qm7(path: str, config: TrainingConfig, coord_key="R", target_key="T", a
         num_nodes.append(unpadded_coords.shape[0])
         num_edges.append(unpadded_coords.shape[0] * min(config.base_config.backbone_config.max_neighbors, unpadded_coords.shape[0]))
         if use_dg:
-            g = create_ddg(
+            g = create_graph(
                 unpadded_coords,
                 unpadded_atom_types,
                 config.base_config.backbone_config.max_neighbors,
                 config.base_config.backbone_config.collapse_tol
             )
         else:
-            g = create_ddg(
+            g = create_graph(
                 unpadded_coords,
                 unpadded_atom_types,
                 config.base_config.backbone_config.max_neighbors,
